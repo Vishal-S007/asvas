@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: open-policy-agent/setup-opa@v2
+        with: { version: 1.21.4 }
+      - run: test -z "$(opa fmt --list policies)"
+      - run: opa check --strict policies
+      - run: opa test -v policies
+
+  execution-plane:
+    runs-on: ubuntu-24.04
+    services:
+      redis: { image: "redis:7", ports: ["6379:6379"] }
+    defaults: { run: { working-directory: execution-plane } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: execution-plane/go.mod, cache-dependency-path: execution-plane/go.sum }
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      # Runs as root so the sandbox UID drop, no_new_privs and nftables egress paths are exercised.
+      - run: sudo -E env "PATH=$PATH" go test ./... -count=1
+
+  control-plane:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_PASSWORD: postgres }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+      redis: { image: "redis:7", ports: ["6379:6379"] }
+    defaults: { run: { working-directory: control-plane } }
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-go@v5
+        with: { go-version-file: execution-plane/go.mod, cache-dependency-path: execution-plane/go.sum }
+      - uses: open-policy-agent/setup-opa@v2
+        with: { version: 1.21.4 }
+      - run: psql -h localhost -U postgres -f ../scripts/db-bootstrap.sql
+      - run: uv sync --frozen
+      - run: uv run ruff check asvas tests
+      # Integration tests start the real Go executor (non-root here => degraded sandbox, reported as such).
+      - run: uv run pytest -q
+
+  dashboard:
+    runs-on: ubuntu-24.04
+    defaults: { run: { working-directory: dashboard } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: dashboard/package-lock.json }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build

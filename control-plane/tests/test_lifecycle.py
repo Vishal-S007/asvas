@@ -288,3 +288,36 @@ def test_orchestrator_loop_processes_streams(client, make_assessment, deps):
     assert not o.errors
     with tenant_tx(tid_of()) as conn:
         assert conn.execute(text("SELECT count(*) FROM job_results")).scalar() == 1
+
+
+def test_lost_planning_request_is_recovered(client, make_assessment, deps):
+    a = make_assessment(ports=(18080,))
+    op = client.as_user("operator@acme.test")
+    client.post(f"/api/v1/assessments/{a['id']}/start", headers=op)
+    deps.r.delete(bus.ORCH)  # simulate the orchestrator crashing with the "plan" message lost
+    with tenant_tx(tid_of()) as conn:
+        conn.execute(text("UPDATE assessments SET updated_at = now() - interval '5 minutes'"))
+    engine.reap(deps)
+    msgs = deps.r.xrange(bus.ORCH)
+    assert msgs and json.loads(msgs[-1][1]["message"])["recovered"] is True
+    engine.run_planning_round(deps, tid_of(), a["id"])
+    assert jobs_of(a["id"])[0]["status"] == "RUNNING"
+
+
+def test_concurrent_planning_is_locked(client, make_assessment, deps):
+    a = make_assessment(ports=(18080,))
+    client.post(f"/api/v1/assessments/{a['id']}/start", headers=client.as_user("operator@acme.test"))
+    deps.r.set(f"asvas:st:{a['id']}:planning", "1")
+    engine.run_planning_round(deps, tid_of(), a["id"])
+    assert jobs_of(a["id"]) == []
+
+
+def test_planning_checkpoints_are_durable(client, make_assessment, deps):
+    from asvas.cli import make_checkpointer
+    deps.checkpointer = make_checkpointer()
+    a = make_assessment(ports=(18080,))
+    client.post(f"/api/v1/assessments/{a['id']}/start", headers=client.as_user("operator@acme.test"))
+    engine.run_planning_round(deps, tid_of(), a["id"])
+    state = deps.checkpointer.get_tuple({"configurable": {"thread_id": f"{a['id']}:0"}})
+    assert state is not None and state.checkpoint["channel_values"]["accepted"]
+    deps.checkpointer.conn.close()

@@ -50,7 +50,7 @@ Status legend:
 |---|---|---|---|---|
 | PL-01 | LangGraph explicit nodes / conditional edges; no open-ended LLM loops | 2, 9-10, 64-66, 71-72 | Done (M1) | `planning/graph.py`; graph is a fixed DAG with bounded replanning |
 | PL-02 | Typed state + validated transitions | 64-65, 72 | Done (M1) | Assessment & job state machines with transition tables; illegal transitions raise and are audited |
-| PL-03 | Durable checkpoints | 4, 65, 72 | Done (M1) | LangGraph `PostgresSaver`; assessment/job state durable in Postgres |
+| PL-03 | Durable checkpoints | 4, 65, 72 | Done (M1) | LangGraph `PostgresSaver` (thread = assessment:round); assessment/job state durable in Postgres; lost planning requests re-issued by reaper |
 | PL-04 | Max depth D_max = 15; loop detection within 2 runs; Tarjan SCC | 9, 49, 72 | Done (M1) | Depth cap configurable (≤15); duplicate (tool,target,params) fingerprint rejection; Tarjan SCC check on plan graph |
 | PL-05 | Failed node → fallback to prior state; 3 consecutive failures mark path blocked | 49, 69 | Partial (M1) | Bounded retries (max attempts) then job `FAILED` + branch blocked; prior-state rollback for graph planning = checkpoint resume |
 | PL-06 | Structured model output validated with Pydantic; temperature 0 | 9, 70 | Done (M1) | `PlanProposal` schema; providers forced to JSON + validation; invalid → honest `PLANNING_FAILED` |
@@ -143,3 +143,22 @@ Status legend:
 | I-13 | Sanitizer sample `re.sub(r'[^\w\s\.\:\/\-\=]','',…)` is not a prompt-injection defense (natural-language injections pass) | 80 | Structural separation (data never in instruction channel) + output validation, not character stripping |
 | I-14 | Evidence DDL stores `payload_raw_stream TEXT` alongside "encrypted" claims; RLS via `current_setting` bypassed by superuser/owner unless `FORCE` | 85 | `FORCE ROW LEVEL SECURITY`, non-owner app role; encryption tracked as open |
 | I-15 | "Temperature 0.0" assumed to give determinism; it does not guarantee identical outputs | 9, 70 | Determinism comes from validation, not temperature |
+
+---
+
+## Verification map (milestone 1)
+
+| Required verification | Automated test(s) |
+|---|---|
+| Scope rejection | `control-plane/tests/test_scope_and_tools.py` (CIDR breadth, out-of-scope IP/host/port/scheme, forbidden nets, loopback, protected ports, authorization window); `test_api_auth.py::test_scope_immutable_after_start_and_window_enforced`; `policies/asvas/decision_test.rego` |
+| Redirect & destination validation | `test_integration.py::test_redirects_validated` (out-of-scope redirect blocked, never contacted; in-scope followed); `execution-plane/internal/netguard` tests; `worker_test.go::TestDNSRebindingDetected`, `TestCompromisedControlPlaneOutOfScopeDenied`, `TestProtectedPortDenied`, `TestKernelEgressBlocksNonAllowlisted` |
+| Invalid tool parameters | `test_scope_and_tools.py::test_invalid_tool_params_rejected`; `worker_test.go::TestInvalidEnvelopesRejected` |
+| Prompt injection in tool output | `test_planning.py::test_injected_proposals_rejected`; `test_lifecycle.py::test_hostile_planner_cannot_create_jobs`; `test_integration.py::test_complete_local_assessment_workflow` (injected banner/body stays evidence; no new targets) |
+| Approval expiry & parameter mismatch | `test_lifecycle.py::test_approval_expiry_before_decision`, `test_approval_expiry_at_dispatch_requests_new_approval`, `test_parameter_change_after_approval_blocks_dispatch`, `test_approval_presented_hash_mismatch_invalidates`, `test_approval_flow_and_dual_control`; `worker_test.go::TestApprovalRequiredAndBoundToParams` |
+| Duplicate job delivery | `test_lifecycle.py::test_duplicate_stale_and_forged_results_ignored`, `test_orchestrator_loop_processes_streams`; `test_integration.py::test_duplicate_job_delivery_executes_once`; `worker_test.go::TestHaltedAndDuplicate` |
+| Worker timeout & cancellation | `test_integration.py::test_worker_timeout_is_bounded`, `test_cancellation_kills_running_worker`, `test_emergency_stop_kills_running_worker`; `test_lifecycle.py::test_reaper_times_out_lost_jobs`, `test_failure_retry_is_bounded`; `worker_test.go::TestTimeoutKillsSandbox`, `TestCancellationKillsRunningJob` |
+| AuthN/AuthZ boundaries | `test_api_auth.py` (401s, forged token, role-claim escalation, role matrix, cross-tenant API + RLS, cross-tenant insert, rate limit) |
+| Evidence-to-finding linkage | `test_lifecycle.py::test_full_simulated_run_and_evidence_linkage`; `test_integration.py::test_complete_local_assessment_workflow`, `test_retest_marks_resolved` |
+| Complete local workflow | `test_integration.py::test_complete_local_assessment_workflow`; `scripts/demo.py`; Playwright UI run (manual, see progress.md) |
+| Honest model failure | `test_planning.py::test_anthropic_provider_invalid_output_is_honest_error`, `test_anthropic_provider_timeout`; `test_lifecycle.py::test_provider_failure_is_reported_honestly`, `test_opa_unavailable_fails_closed` |
+| Durability / recovery | `test_lifecycle.py::test_planning_checkpoints_are_durable`, `test_lost_planning_request_is_recovered`, `test_concurrent_planning_is_locked` |

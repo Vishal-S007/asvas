@@ -163,6 +163,17 @@ def _plan_node(conn, tenant_id, aid, key, parent, round_no, kind, label, status,
 
 
 def run_planning_round(deps: Deps, tenant_id, assessment_id) -> None:
+    # One planner per assessment at a time (duplicate/recovered "plan" messages are no-ops while it runs).
+    lock = f"asvas:st:{assessment_id}:planning"
+    if not deps.r.set(lock, "1", nx=True, ex=120):
+        return
+    try:
+        _run_planning_round(deps, tenant_id, assessment_id)
+    finally:
+        deps.r.delete(lock)
+
+
+def _run_planning_round(deps: Deps, tenant_id, assessment_id) -> None:
     with _tx(deps, tenant_id) as conn:
         a = row(conn, "SELECT * FROM assessments WHERE id = :id", id=str(assessment_id))
         if a is None or a["status"] != "PLANNING":
@@ -669,6 +680,12 @@ def reap(deps: Deps) -> int:
                 n += 1
             for a in rows(conn, "SELECT id FROM assessments WHERE status IN ('RUNNING','AWAITING_APPROVAL','CANCELLING')"):
                 touched.add(a["id"])
+            # Recovery: a planning request lost with a crashed orchestrator is re-issued (planner is lock-guarded).
+            stuck = [a["id"] for a in rows(conn, "SELECT id FROM assessments WHERE status = 'PLANNING' "
+                                                 "AND updated_at < now() - interval '60 seconds'")]
+        for aid in stuck:
+            bus.publish_orchestrator(deps.r, {"type": "plan", "tenant_id": str(tid), "assessment_id": str(aid),
+                                              "recovered": True})
         for aid in touched:
             advance(deps, tid, aid)
     return n

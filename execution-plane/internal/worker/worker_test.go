@@ -359,3 +359,23 @@ func TestHaltedAndDuplicate(t *testing.T) {
 	}
 	_ = fmt.Sprint()
 }
+
+func TestKernelEgressBlocksNonAllowlisted(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("nftables egress requires root")
+	}
+	f := setup(t, nil)
+	defer f.close()
+	sb := f.w.sb.(*sandbox.DevProcess)
+	if sb.Egress() == nil {
+		t.Skip("nft unavailable")
+	}
+	// The probe runs as a sandbox UID with an EMPTY allow-set; the listener exists, so only the kernel rule can refuse it.
+	ok, detail := sb.SelfTest(context.Background(), f.port)
+	if !ok {
+		t.Fatalf("sandbox reached a non-allowlisted port: %s", detail)
+	}
+	if f.hits.Load() != 0 {
+		t.Fatal("target was contacted")
+	}
+}
