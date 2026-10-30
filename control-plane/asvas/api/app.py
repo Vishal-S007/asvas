@@ -1,0 +1,347 @@
+"""FastAPI gateway (spec pp. 86-88): versioned REST, JWT auth, RBAC, schema validation, problem+json errors."""
+
+from __future__ import annotations
+
+import json
+import time
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, PlainTextResponse
+from sqlalchemy import text
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from asvas import audit
+from asvas.api.schemas import (
+    ApprovalDecision,
+    AssessmentCreate,
+    AssessmentUpdate,
+    CancelRequest,
+    DevLogin,
+    EmergencyStop,
+)
+from asvas.audit import verify_chain
+from asvas.auth import Principal, issue_token, lookup_user, require
+from asvas.config import get_settings
+from asvas.db import get_engine, row, rows, tenant_tx
+from asvas.evidence import load_evidence
+from asvas.orchestration import bus, engine
+from asvas.orchestration.engine import Deps, OrchestrationError
+from asvas.reporting import build_report, render_markdown
+from asvas.statemachine import IllegalTransition
+from asvas.tools import catalog
+
+
+def problem(status: int, title: str, detail: Any = None, type_: str = "about:blank") -> JSONResponse:
+    body = {"type": type_, "title": title, "status": status}
+    if detail is not None:
+        body["detail"] = detail
+    return JSONResponse(body, status_code=status, media_type="application/problem+json")
+
+
+def create_app(deps: Deps | None = None) -> FastAPI:
+    s = get_settings()
+    app = FastAPI(title="ASVAS Control Plane", version="0.1.0-m1",
+                  description="Milestone-1 development build. Not production-ready.")
+    app.state.deps = deps or Deps()
+    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+                       allow_methods=["GET", "POST", "PATCH"], allow_headers=["Authorization", "Content-Type"])
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _http(_: Request, e: StarletteHTTPException):
+        resp = problem(e.status_code, str(e.detail))
+        for k, v in (getattr(e, "headers", None) or {}).items():
+            resp.headers[k] = v
+        return resp
+
+    @app.exception_handler(RequestValidationError)
+    async def _validation(_: Request, e: RequestValidationError):
+        errs = [{"loc": list(x["loc"]), "msg": x["msg"], "type": x["type"]} for x in e.errors()]
+        return problem(422, "Request validation failed", errs)
+
+    @app.exception_handler(OrchestrationError)
+    async def _orch(_: Request, e: OrchestrationError):
+        return problem(e.status, str(e))
+
+    @app.exception_handler(IllegalTransition)
+    async def _ill(_: Request, e: IllegalTransition):
+        return problem(409, str(e))
+
+    def deps_of(request: Request) -> Deps:
+        return request.app.state.deps
+
+    def rate_limited(request: Request, p: Principal = Depends(require("viewer"))) -> Principal:
+        r = deps_of(request).r
+        key = f"asvas:rl:{p.tenant_id}:{int(time.time() // 60)}"
+        n = r.incr(key)
+        if n == 1:
+            r.expire(key, 70)
+        if n > s.rate_limit_per_minute:
+            raise HTTPException(429, "tenant rate limit exceeded (100 requests/minute)")
+        return p
+
+    def role(name: str):
+        def dep(p: Principal = Depends(rate_limited)) -> Principal:
+            if not p.has(name):
+                raise HTTPException(403, f"requires role '{name}' (you are '{p.role}')")
+            return p
+        return dep
+
+    api = APIRouter(prefix="/api/v1")
+
+    # ------------------------------------------------------------------ public / auth
+    @api.get("/health")
+    def health(request: Request):
+        d = deps_of(request)
+        out: dict[str, Any] = {}
+        try:
+            with get_engine().connect() as c:
+                c.execute(text("SELECT 1"))
+            out["database"] = "ok"
+        except Exception as e:  # noqa: BLE001
+            out["database"] = f"error: {type(e).__name__}"
+        try:
+            d.r.ping()
+            out["redis"] = "ok"
+        except Exception as e:  # noqa: BLE001
+            out["redis"] = f"error: {type(e).__name__}"
+        out["opa"] = d.policy.health()
+        out["env"] = s.env
+        return out
+
+    if s.env == "development":
+        from asvas.seed import DEV_USERS
+
+        @api.get("/auth/dev-users")
+        def dev_users():
+            return [{"email": u[0], "display_name": u[1], "role": u[2], "tenant": u[3]} for u in DEV_USERS]
+
+        @api.post("/auth/dev-login")
+        def dev_login(body: DevLogin):
+            u = lookup_user(email=body.email)
+            if not u or not u["active"]:
+                raise HTTPException(401, "unknown or inactive user")
+            with tenant_tx(u["tenant_id"]) as conn:
+                audit.record(conn, u["tenant_id"], f"user:{u['id']}", "auth.dev_login", {"email": u["email"]})
+            return {"access_token": issue_token(u["id"], u["tenant_id"], u["role"]), "token_type": "bearer",
+                    "dev_only": True}
+
+    @api.get("/me")
+    def me(p: Principal = Depends(rate_limited)):
+        return {"user_id": str(p.user_id), "tenant_id": str(p.tenant_id), "email": p.email,
+                "display_name": p.display_name, "role": p.role}
+
+    @api.get("/tools")
+    def tools(_: Principal = Depends(rate_limited)):
+        return catalog()
+
+    # ------------------------------------------------------------------ assessments
+    @api.get("/assessments")
+    def list_assessments(p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            return rows(conn, "SELECT a.id, a.name, a.status, a.created_at, a.updated_at, a.started_at, a.finished_at, "
+                              "a.provider_name, a.provider_is_live_ai, a.failure_reason, "
+                              "(SELECT count(*) FROM findings f WHERE f.assessment_id = a.id) AS findings, "
+                              "(SELECT count(*) FROM approvals x WHERE x.assessment_id = a.id AND x.status='PENDING') "
+                              "AS pending_approvals FROM assessments a ORDER BY a.created_at DESC LIMIT 200")
+
+    @api.post("/assessments", status_code=201)
+    def create_assessment(body: AssessmentCreate, p: Principal = Depends(role("operator"))):
+        with tenant_tx(p.tenant_id) as conn:
+            aid = conn.execute(text(
+                "INSERT INTO assessments (tenant_id, name, description, status, scope, testing_policy, created_by) "
+                "VALUES (:t,:n,:d,'DRAFT',CAST(:s AS jsonb),CAST(:pol AS jsonb),:u) RETURNING id"),
+                {"t": str(p.tenant_id), "n": body.name, "d": body.description,
+                 "s": body.scope.model_dump_json(), "pol": body.testing_policy.model_dump_json(),
+                 "u": str(p.user_id)}).scalar()
+            audit.record(conn, p.tenant_id, p.actor, "assessment.created",
+                         {"name": body.name, "scope": body.scope.model_dump(mode="json"),
+                          "testing_policy": body.testing_policy.model_dump(mode="json")}, aid)
+            return row(conn, "SELECT * FROM assessments WHERE id = :id", id=str(aid))
+
+    def _get(conn, aid: uuid.UUID) -> dict:
+        a = row(conn, "SELECT * FROM assessments WHERE id = :id", id=str(aid))
+        if a is None:
+            raise HTTPException(404, "assessment not found")
+        a.pop("frozen_scope_doc", None)
+        return a
+
+    @api.get("/assessments/{aid}")
+    def get_assessment(aid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            a = _get(conn, aid)
+            a["job_counts"] = {r["status"]: r["n"] for r in rows(
+                conn, "SELECT status, count(*) n FROM jobs WHERE assessment_id = :a GROUP BY status", a=str(aid))}
+            return a
+
+    @api.patch("/assessments/{aid}")
+    def update_assessment(aid: uuid.UUID, body: AssessmentUpdate, p: Principal = Depends(role("operator"))):
+        with tenant_tx(p.tenant_id) as conn:
+            a = row(conn, "SELECT status FROM assessments WHERE id = :id FOR UPDATE", id=str(aid))
+            if a is None:
+                raise HTTPException(404, "assessment not found")
+            if a["status"] != "DRAFT":
+                raise HTTPException(409, "scope and policy are immutable once an assessment has started")
+            changes = body.model_dump(exclude_none=True, mode="json")
+            for k, col in (("name", "name"), ("description", "description")):
+                if k in changes:
+                    conn.execute(text(f"UPDATE assessments SET {col} = :v WHERE id = :id"), {"v": changes[k], "id": str(aid)})
+            for k in ("scope", "testing_policy"):
+                if k in changes:
+                    conn.execute(text(f"UPDATE assessments SET {k} = CAST(:v AS jsonb) WHERE id = :id"),
+                                 {"v": json.dumps(changes[k]), "id": str(aid)})
+            conn.execute(text("UPDATE assessments SET updated_at = now(), version = version + 1 WHERE id = :id"),
+                         {"id": str(aid)})
+            audit.record(conn, p.tenant_id, p.actor, "assessment.updated", changes, aid)
+            return _get(conn, aid)
+
+    @api.post("/assessments/{aid}/start", status_code=202)
+    def start(aid: uuid.UUID, request: Request, p: Principal = Depends(role("operator"))):
+        res = engine.start_assessment(deps_of(request), p.tenant_id, aid, p.user_id)
+        return {**res, "status_url": f"/api/v1/assessments/{aid}"}
+
+    @api.post("/assessments/{aid}/cancel", status_code=202)
+    def cancel(aid: uuid.UUID, body: CancelRequest, request: Request, p: Principal = Depends(role("operator"))):
+        return {"assessment_id": str(aid),
+                "status": engine.cancel_assessment(deps_of(request), p.tenant_id, aid, p.actor, body.reason)}
+
+    @api.get("/assessments/{aid}/jobs")
+    def jobs(aid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            _get(conn, aid)
+            out = rows(conn, "SELECT * FROM jobs WHERE assessment_id = :a ORDER BY created_at", a=str(aid))
+            res = {r["job_id"]: r for r in rows(conn, "SELECT r.* FROM job_results r JOIN jobs j ON j.id = r.job_id "
+                                                      "WHERE j.assessment_id = :a ORDER BY r.attempt", a=str(aid))}
+            for j in out:
+                j["last_result"] = res.get(j["id"])
+            return out
+
+    @api.get("/assessments/{aid}/plan")
+    def plan(aid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            _get(conn, aid)
+            return rows(conn, "SELECT n.*, j.status AS job_status FROM plan_nodes n LEFT JOIN jobs j "
+                              "ON j.id::text = n.data->>'job_id' WHERE n.assessment_id = :a ORDER BY n.round, n.created_at",
+                        a=str(aid))
+
+    @api.get("/assessments/{aid}/timeline")
+    def timeline(aid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            _get(conn, aid)
+            return rows(conn, "SELECT id, actor, event_type, data, created_at, hash FROM audit_events "
+                              "WHERE assessment_id = :a ORDER BY id", a=str(aid))
+
+    @api.get("/assessments/{aid}/findings")
+    def findings(aid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            _get(conn, aid)
+            out = rows(conn, "SELECT f.*, s.identifier AS asset FROM findings f JOIN assets s ON s.id = f.asset_id "
+                             "WHERE f.assessment_id = :a ORDER BY f.created_at", a=str(aid))
+            for f in out:
+                f["retests"] = rows(conn, "SELECT * FROM finding_retests WHERE finding_id = :f ORDER BY created_at",
+                                    f=str(f["id"]))
+            return out
+
+    @api.get("/assessments/{aid}/assets")
+    def assets(aid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            _get(conn, aid)
+            return {"assets": rows(conn, "SELECT * FROM assets WHERE assessment_id = :a ORDER BY kind, identifier", a=str(aid)),
+                    "relations": rows(conn, "SELECT * FROM asset_relations WHERE assessment_id = :a", a=str(aid))}
+
+    @api.get("/assessments/{aid}/report")
+    def report(aid: uuid.UUID, format: str = Query("json", pattern="^(json|md)$"), p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            rep = build_report(conn, p.tenant_id, aid)
+            if rep is None:
+                raise HTTPException(404, "assessment not found")
+            audit.record(conn, p.tenant_id, p.actor, "report.generated", {"format": format}, aid)
+        if format == "md":
+            return PlainTextResponse(render_markdown(rep), media_type="text/markdown")
+        return rep
+
+    # ------------------------------------------------------------------ approvals
+    @api.get("/approvals")
+    def approvals(status: str | None = Query(None, pattern="^(PENDING|APPROVED|REJECTED|EXPIRED|INVALIDATED|CONSUMED)$"),
+                  p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            q = ("SELECT x.*, a.name AS assessment_name, (x.expires_at <= now()) AS is_expired FROM approvals x "
+                 "JOIN assessments a ON a.id = x.assessment_id")
+            if status:
+                return rows(conn, q + " WHERE x.status = :s ORDER BY x.created_at DESC LIMIT 200", s=status)
+            return rows(conn, q + " ORDER BY x.created_at DESC LIMIT 200")
+
+    @api.post("/approvals/{apid}/decision")
+    def decide(apid: uuid.UUID, body: ApprovalDecision, request: Request, p: Principal = Depends(role("approver"))):
+        return engine.decide_approval(deps_of(request), p.tenant_id, apid, p.user_id, p.role, body.decision,
+                                      body.binding_hash, body.reason)
+
+    # ------------------------------------------------------------------ findings / evidence
+    @api.post("/findings/{fid}/retest", status_code=202)
+    def retest(fid: uuid.UUID, request: Request, p: Principal = Depends(role("operator"))):
+        return engine.request_retest(deps_of(request), p.tenant_id, fid, p.user_id)
+
+    @api.get("/evidence/{eid}")
+    def evidence(eid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            e = load_evidence(conn, eid)
+            if e is None:
+                raise HTTPException(404, "evidence not found")
+            return e
+
+    # ------------------------------------------------------------------ audit / system
+    @api.get("/audit")
+    def audit_log(limit: int = Query(200, ge=1, le=1000), p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            return rows(conn, "SELECT id, assessment_id, actor, event_type, data, created_at, prev_hash, hash "
+                              "FROM audit_events ORDER BY id DESC LIMIT :n", n=limit)
+
+    @api.get("/audit/verify")
+    def audit_verify(p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            return verify_chain(conn, p.tenant_id)
+
+    @api.get("/system/status")
+    def system_status(request: Request, p: Principal = Depends(rate_limited)):
+        d = deps_of(request)
+        now = time.time()
+        workers = []
+        try:
+            for wid, raw in d.r.hgetall(bus.WORKERS).items():
+                w = json.loads(raw)
+                w["worker_id"] = wid
+                w["stale"] = now - w.get("heartbeat_unix", 0) > s.worker_stale_seconds
+                workers.append(w)
+            redis_ok = True
+        except Exception:  # noqa: BLE001
+            redis_ok = False
+        with tenant_tx(p.tenant_id) as conn:
+            ctl = row(conn, "SELECT * FROM tenant_controls WHERE tenant_id = :t", t=str(p.tenant_id))
+        return {"workers": workers, "redis_ok": redis_ok, "policy_engine": d.policy.health(),
+                "emergency_stop": bool(ctl and ctl["emergency_stop"]), "emergency_stop_detail": ctl,
+                "planner": {"provider": s.model_provider,
+                            "is_live_ai": s.model_provider != "deterministic-test"},
+                "unavailable_features": [
+                    {"feature": "Firecracker microVM isolation", "requirement": "PO-10", "reason": "needs KVM host"},
+                    {"feature": "eBPF syscall monitor", "requirement": "PO-12", "reason": "needs eBPF-capable host"},
+                    {"feature": "Neo4j asset graph", "requirement": "DA-03", "reason": "planned M2"},
+                    {"feature": "Qdrant long-term memory", "requirement": "DA-04", "reason": "planned M3"},
+                    {"feature": "OIDC SSO / MFA", "requirement": "CP-07", "reason": "planned M3"},
+                    {"feature": "PDF reports", "requirement": "DA-11", "reason": "planned M2"},
+                    {"feature": "Compliance mapping", "requirement": "DA-12", "reason": "planned M4"},
+                ]}
+
+    @api.post("/system/emergency-stop")
+    def estop(body: EmergencyStop, request: Request, p: Principal = Depends(role("admin"))):
+        return engine.emergency_stop(deps_of(request), p.tenant_id, p.user_id, body.reason)
+
+    @api.post("/system/emergency-stop/reset")
+    def estop_reset(request: Request, p: Principal = Depends(role("admin"))):
+        engine.reset_emergency_stop(deps_of(request), p.tenant_id, p.user_id)
+        return {"emergency_stop": False}
+
+    app.include_router(api)
+    return app

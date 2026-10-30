@@ -1,0 +1,63 @@
+"""Runtime configuration. All secrets come from the environment; nothing is hard-coded for non-dev use."""
+
+from __future__ import annotations
+
+import functools
+import hashlib
+import hmac
+
+from pydantic import Field, SecretStr, model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEV_PLACEHOLDER = "dev-only-change-me"
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_prefix="ASVAS_", env_file=".env", extra="ignore")
+
+    env: str = Field(default="development", pattern="^(development|test|production)$")
+    database_url: str = "postgresql+psycopg://asvas_app:asvas_app_dev@localhost:5432/asvas"
+    migration_database_url: str = "postgresql+psycopg://asvas_owner:asvas_owner_dev@localhost:5432/asvas"
+    redis_url: str = "redis://localhost:6379/0"
+    opa_url: str = "http://127.0.0.1:8181"
+    opa_timeout_seconds: float = 2.0
+
+    jwt_secret: SecretStr = SecretStr(DEV_PLACEHOLDER)
+    jwt_ttl_minutes: int = 60
+    # Master key for HMAC signing of job envelopes and approval tokens (shared with execution plane).
+    signing_key: SecretStr = SecretStr(DEV_PLACEHOLDER)
+
+    # Model provider. "deterministic-test" is NOT an AI assessment and is labelled as such everywhere.
+    model_provider: str = Field(default="deterministic-test", pattern="^(deterministic-test|anthropic)$")
+    model_name: str = "claude-sonnet-4-5"
+    anthropic_api_key: SecretStr | None = None
+    anthropic_base_url: str = "https://api.anthropic.com"
+    model_timeout_seconds: float = 10.0  # spec p.54: < 10 s
+
+    # Local test environments: loopback targets are refused unless explicitly enabled.
+    allow_loopback_targets: bool = False
+    # Ports of the platform itself; never valid targets even on loopback.
+    protected_ports: list[int] = [5432, 6379, 8000, 8181, 5173, 7474, 7687, 6333]
+
+    rate_limit_per_minute: int = 100  # spec p.86
+    approval_ttl_minutes: int = 15
+    dispatch_grace_seconds: int = 20
+    worker_stale_seconds: int = 15
+
+    @model_validator(mode="after")
+    def _refuse_dev_secrets_outside_dev(self) -> Settings:
+        if self.env == "production":
+            for name in ("jwt_secret", "signing_key"):
+                if getattr(self, name).get_secret_value() == DEV_PLACEHOLDER:
+                    raise ValueError(f"ASVAS_{name.upper()} must be set outside development")
+            if self.allow_loopback_targets:
+                raise ValueError("loopback targets cannot be enabled in production")
+        return self
+
+    def derived_key(self, purpose: str) -> bytes:
+        return hmac.new(self.signing_key.get_secret_value().encode(), purpose.encode(), hashlib.sha256).digest()
+
+
+@functools.lru_cache
+def get_settings() -> Settings:
+    return Settings()

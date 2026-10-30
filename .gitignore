@@ -1,0 +1,53 @@
+# Secrets & local config — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.crt
+secrets/
+credentials*.json
+
+# Evidence, reports, dumps — private assessment data
+var/
+evidence/
+reports/
+*.dump
+*.sql.gz
+*.sqlite
+*.db
+dump.rdb
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Go
+execution-plane/bin/
+*.test
+*.out
+
+# Node
+node_modules/
+dashboard/dist/
+*.tsbuildinfo
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local runtime
+logs/
+*.log
+*.pid
+.tools/
