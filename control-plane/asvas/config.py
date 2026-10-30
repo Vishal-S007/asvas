@@ -50,6 +50,8 @@ class Settings(BaseSettings):
             for name in ("jwt_secret", "signing_key"):
                 if getattr(self, name).get_secret_value() == DEV_PLACEHOLDER:
                     raise ValueError(f"ASVAS_{name.upper()} must be set outside development")
+                if len(getattr(self, name).get_secret_value()) < 32:
+                    raise ValueError(f"ASVAS_{name.upper()} must be at least 32 characters")
             if self.allow_loopback_targets:
                 raise ValueError("loopback targets cannot be enabled in production")
         return self

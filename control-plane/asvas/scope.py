@@ -109,6 +109,7 @@ class Scope(Strict):
 
 
 class TestingPolicy(Strict):
+    __test__ = False  # not a pytest test class
     allowed_tools: list[ToolId] = Field(default=["http.security_headers"], min_length=1)
     approval_required_risk_tiers: list[RiskTier] = Field(default=["high"])
     max_requests_per_second: int = Field(default=2, ge=1, le=10)

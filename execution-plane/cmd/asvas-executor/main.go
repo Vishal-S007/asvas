@@ -56,6 +56,9 @@ func run(log *slog.Logger) error {
 		}
 	}
 	slots, _ := strconv.Atoi(env("ASVAS_EXECUTOR_SLOTS", "4"))
+	if base, err := strconv.Atoi(env("ASVAS_SANDBOX_BASE_UID", "61000")); err == nil && base >= 1000 {
+		sandbox.BaseUID = base
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

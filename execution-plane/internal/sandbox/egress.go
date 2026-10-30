@@ -13,7 +13,7 @@ import (
 	"github.com/asvas/execution-plane/internal/netguard"
 )
 
-const nftTable = "asvas_exec"
+func tableName() string { return fmt.Sprintf("asvas_exec_%d", BaseUID) }
 
 // Egress programs per-slot nftables allow-sets keyed by the sandbox UID. Every packet from a sandbox UID
 // that is not to an allowlisted ip:port is rejected by the kernel, independently of the tool code.
@@ -37,7 +37,7 @@ func NewEgress(slots int) (*Egress, error) {
 		return nil, err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "table inet %s\ndelete table inet %s\ntable inet %s {\n", nftTable, nftTable, nftTable)
+	fmt.Fprintf(&b, "table inet %s\ndelete table inet %s\ntable inet %s {\n", tableName(), tableName(), tableName())
 	for i := 0; i <= slots; i++ {
 		fmt.Fprintf(&b, "  set allow4_%d { type ipv4_addr . inet_service; }\n  set allow6_%d { type ipv6_addr . inet_service; }\n", i, i)
 	}
@@ -59,7 +59,7 @@ func (e *Egress) Allow(slot int, eps []netguard.Endpoint) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var b strings.Builder
-	fmt.Fprintf(&b, "flush set inet %s allow4_%d\nflush set inet %s allow6_%d\n", nftTable, slot, nftTable, slot)
+	fmt.Fprintf(&b, "flush set inet %s allow4_%d\nflush set inet %s allow6_%d\n", tableName(), slot, tableName(), slot)
 	for _, ep := range eps {
 		for _, ip := range ep.IPs {
 			a, err := netip.ParseAddr(ip)
@@ -70,7 +70,7 @@ func (e *Egress) Allow(slot int, eps []netguard.Endpoint) error {
 			if a.Is6() && !a.Is4In6() {
 				set = "allow6"
 			}
-			fmt.Fprintf(&b, "add element inet %s %s_%d { %s . %d }\n", nftTable, set, slot, a.Unmap(), ep.Port)
+			fmt.Fprintf(&b, "add element inet %s %s_%d { %s . %d }\n", tableName(), set, slot, a.Unmap(), ep.Port)
 		}
 	}
 	return nft(b.String())
@@ -79,10 +79,10 @@ func (e *Egress) Allow(slot int, eps []netguard.Endpoint) error {
 func (e *Egress) Clear(slot int) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_ = nft(fmt.Sprintf("flush set inet %s allow4_%d\nflush set inet %s allow6_%d\n", nftTable, slot, nftTable, slot))
+	_ = nft(fmt.Sprintf("flush set inet %s allow4_%d\nflush set inet %s allow6_%d\n", tableName(), slot, tableName(), slot))
 }
 
-func (e *Egress) Teardown() { _ = nft(fmt.Sprintf("delete table inet %s\n", nftTable)) }
+func (e *Egress) Teardown() { _ = nft(fmt.Sprintf("delete table inet %s\n", tableName())) }
 
 type netDialer struct{}
 

@@ -31,6 +31,7 @@ packages = ["asvas"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["integration: needs the Go executor, OPA, PostgreSQL, Redis and the local test target"]
 
 [tool.ruff]
 line-length = 110

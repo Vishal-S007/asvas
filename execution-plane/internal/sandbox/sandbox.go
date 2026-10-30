@@ -53,7 +53,9 @@ func NewFirecracker() (*Firecracker, error) {
 
 // ---------------------------------------------------------------------------------- devprocess
 
-const BaseUID = 61000
+// BaseUID is the first sandbox UID; slot i runs as BaseUID+i. Distinct executors on one host need distinct
+// ranges (ASVAS_SANDBOX_BASE_UID) because nftables egress rules are keyed by UID.
+var BaseUID = 61000
 
 type DevProcess struct {
 	exe    string
@@ -67,6 +69,9 @@ func NewDevProcess(slots int) (*DevProcess, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
+	}
+	if override := os.Getenv("ASVAS_SANDBOX_EXE"); override != "" { // used by tests (binary must be readable by sandbox UIDs)
+		exe = override
 	}
 	d := &DevProcess{exe: exe, asRoot: os.Geteuid() == 0, maxOut: 2 << 20}
 	level := "dev-process: separate UID, no capabilities, no_new_privs, rlimits (shared kernel; NOT a microVM)"

@@ -11,6 +11,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -66,8 +67,20 @@ class Deps:
         return self.opa
 
 
+class AuditedRefusal(OrchestrationError):
+    """A refusal whose audit/state changes must be committed before the error propagates."""
+
+
+@contextmanager
 def _tx(deps: Deps, tenant_id):
-    return tenant_tx(tenant_id, deps.engine)
+    refusal: AuditedRefusal | None = None
+    with tenant_tx(tenant_id, deps.engine) as conn:
+        try:
+            yield conn
+        except AuditedRefusal as e:
+            refusal = e  # swallow inside the transaction so it COMMITs, then re-raise below
+    if refusal is not None:
+        raise refusal
 
 
 def _halted(conn: Connection, tenant_id, assessment: dict) -> bool:
@@ -92,7 +105,7 @@ def start_assessment(deps: Deps, tenant_id, assessment_id, actor_id) -> dict:
         problems = check_authorization_window(scope)
         if problems:
             audit.record(conn, tenant_id, f"user:{actor_id}", "assessment.start_refused", {"reasons": problems}, assessment_id)
-            raise OrchestrationError("; ".join(problems), 422)
+            raise AuditedRefusal("; ".join(problems), 422)
         frozen = canonical_json({"scope": scope.model_dump(mode="json"), "policy": a["testing_policy"]})
         conn.execute(text("UPDATE assessments SET frozen_scope_doc = :d, started_by = :u, started_at = now() WHERE id = :id"),
                      {"d": frozen, "u": str(actor_id), "id": str(assessment_id)})
@@ -136,7 +149,7 @@ def _materialize(deps: Deps):
             "UPDATE assessments SET planning_rounds = planning_rounds + 1, tokens_used = tokens_used + :tok, "
             "provider_name = :p, provider_is_live_ai = :live, planner_done = :done WHERE id = :id"),
             {"tok": state.get("tokens", 0), "p": state.get("provider_name"), "live": state.get("is_live_ai"),
-             "done": bool(state.get("done")) or not state.get("accepted"), "id": str(aid)})
+             "done": bool(state.get("done")), "id": str(aid)})
         record_planning_audit(conn, tenant_id, aid, state)
     return fn
 
@@ -269,11 +282,11 @@ def decide_approval(deps: Deps, tenant_id, approval_id, actor_id, actor_role: st
         if ap["expires_at"] <= dt.datetime.now(dt.UTC):
             conn.execute(text("UPDATE approvals SET status='EXPIRED' WHERE id=:id"), {"id": str(approval_id)})
             audit.record(conn, tenant_id, actor, "approval.expired", {"approval_id": str(approval_id)}, ap["assessment_id"])
-            raise OrchestrationError("approval request has expired", 410)
+            raise AuditedRefusal("approval request has expired", 410)
         if ap["requested_by"] and str(ap["requested_by"]) == str(actor_id):
             audit.record(conn, tenant_id, actor, "approval.self_approval_refused", {"approval_id": str(approval_id)},
                          ap["assessment_id"])
-            raise OrchestrationError("the requester cannot approve their own action (dual control)", 403)
+            raise AuditedRefusal("the requester cannot approve their own action (dual control)", 403)
         job = row(conn, "SELECT * FROM jobs WHERE id = :id FOR UPDATE", id=str(ap["job_id"]))
         current = binding_hash(str(ap["assessment_id"]), str(job["id"]), job["tool_id"], job["target"], job["params"])
         if presented_binding_hash != ap["binding_hash"] or current != ap["binding_hash"]:
@@ -284,7 +297,7 @@ def decide_approval(deps: Deps, tenant_id, approval_id, actor_id, actor_role: st
                           "stored": ap["binding_hash"], "current": current}, ap["assessment_id"])
             if job["status"] == "AWAITING_APPROVAL":
                 transition_job(conn, tenant_id, job["id"], "DENIED", "system:approvals", "approval binding mismatch")
-            raise OrchestrationError("action parameters changed since approval was requested; approval invalidated")
+            raise AuditedRefusal("action parameters changed since approval was requested; approval invalidated")
         if decision == "approve":
             exp = int(ap["expires_at"].timestamp())
             token = bus.approval_token(str(approval_id), ap["binding_hash"], exp)
