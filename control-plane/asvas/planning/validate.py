@@ -117,6 +117,8 @@ def validate_proposal(proposal: PlanProposal, scope: Scope, policy: dict, existi
         else:
             if s.tool_id not in policy["allowed_tools"]:
                 reasons.append(f"tool {s.tool_id} is not allowed by the testing policy")
+            if s.target.scheme.lower() not in spec.schemes:
+                reasons.append(f"tool {s.tool_id} does not support scheme {s.target.scheme}")
             try:
                 params = validate_params(s.tool_id, s.params)
             except ToolParamError as e:

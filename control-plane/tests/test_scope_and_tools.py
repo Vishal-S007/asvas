@@ -122,3 +122,26 @@ def test_naive_datetimes_rejected():
     body["scope"]["authorization"]["valid_from"] = dt.datetime.now().replace(tzinfo=None).isoformat()
     with pytest.raises(ValidationError):
         Scope.model_validate(body["scope"])
+
+
+def test_tls_rules_from_evidence():
+    from asvas.evidence import evaluate_rules
+    ok = {"probe": "default", "handshake": True, "version": "TLS 1.3", "self_signed": False,
+          "days_until_expiry": 200, "expiry_warning_days": 30}
+    ex = [{"seq": 0, "tls": ok}, {"seq": 1, "tls": {"probe": "legacy-only", "handshake": False}}]
+    assert evaluate_rules("tls.configuration", {"scheme": "https"}, ex) == []
+    bad = dict(ok, verify_error="x509: unknown authority", hostname_error="x509: not valid for 1.2.3.4", days_until_expiry=-1)
+    ex = [{"seq": 0, "tls": bad}, {"seq": 1, "tls": {"probe": "legacy-only", "handshake": True, "version": "TLS 1.0"}}]
+    rules = {h.rule_id for h in evaluate_rules("tls.configuration", {"scheme": "https"}, ex)}
+    assert rules == {"TLS-UNTRUSTED", "TLS-HOSTNAME", "TLS-EXPIRED", "TLS-LEGACY"}
+
+
+def test_tls_tool_requires_https_scheme():
+    from asvas.planning.providers import PlanProposal
+    from asvas.planning.validate import validate_proposal
+    s = Scope.model_validate(scope_body()["scope"])
+    p = PlanProposal(steps=[{"step_id": "t", "tool_id": "tls.configuration", "target": {"scheme": "http", "host": "127.0.0.1",
+                             "port": 18080}, "params": {}, "rationale": "r"}], done=True, summary="x")
+    pol = TestingPolicy(allowed_tools=["tls.configuration"]).model_dump()
+    out = validate_proposal(p, s, pol, set(), 0, 0)
+    assert not out.accepted and "does not support scheme" in " ".join(out.rejected[0][1])

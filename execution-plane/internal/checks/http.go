@@ -30,6 +30,7 @@ type Spec struct {
 	ToolID      string              `json:"tool_id"`
 	Target      netguard.Endpoint   `json:"target"`
 	Path        string              `json:"path"`
+	ExpiryDays  int                 `json:"expiry_days"`
 	Method      string              `json:"method"`
 	MaxRedirect int                 `json:"max_redirects"`
 	Allow       []netguard.Endpoint `json:"allow"`
@@ -69,6 +70,7 @@ type Exchange struct {
 	Request       Request   `json:"request"`
 	Response      *Response `json:"response"`
 	Redirect      *Redirect `json:"redirect"`
+	TLS           *TLSInfo  `json:"tls,omitempty"`
 	Error         *string   `json:"error"`
 	StartedUnixMS int64     `json:"started_unix_ms"`
 	DurationMS    int64     `json:"duration_ms"`
@@ -142,6 +144,8 @@ func Run(ctx context.Context, s Spec) Result {
 		method, maxRedirects = s.Method, s.MaxRedirect
 	case "http.allowed_methods":
 		method = http.MethodOptions
+	case "tls.configuration":
+		return RunTLS(ctx, s)
 	default:
 		res.Error = "unknown tool"
 		return res

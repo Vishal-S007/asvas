@@ -39,6 +39,10 @@ class AllowedMethodsParams(_Params):
     _path = field_validator("path")(classmethod(lambda cls, v: _validate_path(v)))
 
 
+class TLSParams(_Params):
+    expiry_warning_days: int = Field(default=30, ge=1, le=365)
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     tool_id: str
@@ -49,6 +53,7 @@ class ToolSpec:
     params_model: type[_Params]
     max_requests: int
     description: str
+    schemes: tuple[str, ...] = ("http", "https")
 
 
 REGISTRY: dict[str, ToolSpec] = {
@@ -60,6 +65,11 @@ REGISTRY: dict[str, ToolSpec] = {
         "http.allowed_methods", "Advertised HTTP methods (OPTIONS)", "medium", "non_destructive",
         "RECON", AllowedMethodsParams, 1,
         "Sends a single OPTIONS request and records the Allow header. Never sends the advertised methods."),
+    "tls.configuration": ToolSpec(
+        "tls.configuration", "TLS protocol & certificate configuration", "low", "non_destructive",
+        "CONFIG_VERIFIER", TLSParams, 2,
+        "Performs up to two TLS handshakes (default, then TLS 1.0/1.1 only) and records protocol, cipher and "
+        "certificate details. Sends no application data.", ("https",)),
 }
 
 
@@ -83,6 +93,7 @@ def catalog() -> list[dict]:
     return [
         {"tool_id": s.tool_id, "title": s.title, "risk_tier": s.risk_tier, "category": s.category,
          "agent_role": s.agent_role, "max_requests": s.max_requests, "description": s.description,
+         "schemes": list(s.schemes),
          "params_schema": s.params_model.model_json_schema()}
         for s in REGISTRY.values()
     ]

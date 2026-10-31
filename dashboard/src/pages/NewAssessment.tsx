@@ -6,6 +6,7 @@ import { can, useMe } from "../App";
 const TOOLS = [
   { id: "http.security_headers", label: "HTTP security headers & cookies (low risk)" },
   { id: "http.allowed_methods", label: "Advertised HTTP methods via OPTIONS (medium risk)" },
+  { id: "tls.configuration", label: "TLS protocol & certificate configuration — https targets only (low risk)" },
 ];
 
 function localInput(d: Date) {

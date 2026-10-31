@@ -9,12 +9,17 @@ Port 18080 ("weak"):
   GET /redirect-out 302 -> http://198.51.100.7/  (TEST-NET-2, out of scope: must be blocked, never contacted)
   GET /slow         sleeps 120 s (timeout/cancellation tests)
 Port 18081 ("hardened"): all checked headers present, no version banner, secure cookie flags.
+Port 18443 ("weak TLS"): same app as 18080 over HTTPS with a self-signed certificate for "localhost" only
+                  (name mismatch for 127.0.0.1), valid for 10 days, TLS 1.0/1.1 still accepted.
 
 A "fixed" mode (env TARGET_FIXED=1) makes 18080 behave like 18081, to demonstrate retest -> resolved.
 """
 
 import os
+import ssl
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -96,9 +101,28 @@ class Hardened(Weak):
     hardened = True
 
 
+def weak_tls_context() -> ssl.SSLContext:
+    """Self-signed cert for 'localhost' only (so 127.0.0.1 mismatches), expiring in 10 days, TLS 1.0+ accepted."""
+    d = tempfile.mkdtemp(prefix="asvas-target-tls-")
+    key, crt = os.path.join(d, "k.pem"), os.path.join(d, "c.pem")
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", crt,
+                    "-days", "10", "-subj", "/CN=asvas-weak-test-target", "-addext", "subjectAltName=DNS:localhost"],
+                   check=True, capture_output=True)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.minimum_version = ssl.TLSVersion.TLSv1
+    ctx.set_ciphers("DEFAULT:@SECLEVEL=0")
+    ctx.load_cert_chain(crt, key)
+    return ctx
+
+
 def main():
     servers = [ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("WEAK_PORT", 18080))), Weak),
                ThreadingHTTPServer(("127.0.0.1", int(os.environ.get("HARDENED_PORT", 18081))), Hardened)]
+    tls_port = int(os.environ.get("TLS_PORT", 18443))
+    if tls_port:
+        tls_srv = ThreadingHTTPServer(("127.0.0.1", tls_port), Weak)
+        tls_srv.socket = weak_tls_context().wrap_socket(tls_srv.socket, server_side=True)
+        servers.append(tls_srv)
     for s in servers:
         s.daemon_threads = True
         threading.Thread(target=s.serve_forever, daemon=True).start()

@@ -250,6 +250,8 @@ func (w *Worker) Execute(ctx context.Context, slot int, env *envelope.Envelope) 
 		spec.Path, spec.Method, spec.MaxRedirect = p.Path, p.Method, p.MaxRedirects
 	case envelope.AllowedMethodsParams:
 		spec.Path = p.Path
+	case envelope.TLSParams:
+		spec.ExpiryDays = p.ExpiryWarningDays
 	}
 	remaining := time.Until(time.Unix(env.DeadlineUnix, 0))
 	if lim := time.Duration(env.TimeoutSeconds) * time.Second; remaining > lim {
@@ -283,7 +285,8 @@ func (w *Worker) Execute(ctx context.Context, slot int, env *envelope.Envelope) 
 		out.Status, out.Error = "TIMED_OUT", "sandbox killed after timeout"
 	case err != nil:
 		out.Status, out.Error = "FAILED", err.Error()
-	case len(res.Exchanges) == 0 || res.Exchanges[0].Response == nil:
+	case len(res.Exchanges) == 0 || (res.Exchanges[0].Response == nil &&
+		(res.Exchanges[0].TLS == nil || !res.Exchanges[0].TLS.Handshake)):
 		out.Status = "FAILED"
 		if out.Error == "" {
 			out.Error = "no response from target"

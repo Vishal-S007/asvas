@@ -148,3 +148,17 @@ test_budget_and_rate_caps if {
 	not decision.allow with input as object.union(base, {"action": object.union(base.action, {"requests_per_second": 9})})
 	not decision.allow with input as object.union(base, {"action": object.union(base.action, {"timeout_seconds": 301})})
 }
+
+test_tls_tool_requires_https if {
+	inp := object.union(base, {
+		"action": object.union(base.action, {"tool_id": "tls.configuration", "max_requests": 2}),
+		"policy": object.union(base.policy, {"allowed_tools": ["tls.configuration"]}),
+	})
+	d := decision.decision with input as inp
+	"tool does not support this target scheme" in d.deny_reasons
+	https := object.union(inp, {
+		"target": object.union(base.target, {"scheme": "https"}),
+		"scope": object.union(base.scope, {"targets": [{"host": "app.test.internal", "ports": [8080], "schemes": ["https"]}]}),
+	})
+	decision.allow with input as https
+}

@@ -118,7 +118,49 @@ def _set_cookies(ex: dict) -> list[str]:
     return [v for k, v in (ex.get("response") or {}).get("headers", []) if k.lower() == "set-cookie"]
 
 
+def evaluate_tls(exchanges: list[dict]) -> list[RuleHit]:
+    hits: list[RuleHit] = []
+    by_probe = {e["tls"]["probe"]: e for e in exchanges if e.get("tls")}
+    d = by_probe.get("default")
+    if d and d["tls"]["handshake"]:
+        t, seq = d["tls"], int(d["seq"])
+        if t.get("verify_error"):
+            hits.append(RuleHit("TLS-UNTRUSTED", "Certificate does not validate against trusted roots",
+                                f"Chain validation failed: {t['verify_error'][:200]} (self-signed: {t['self_signed']}; "
+                                f"issuer {t.get('leaf_issuer', '')[:120]!r}).", "medium",
+                                "Clients cannot authenticate the server; users may be trained to accept warnings. "
+                                "Validated against the executor host's root store.", "high", "confirmed", "CWE-295",
+                                "Serve a certificate issued by a trusted CA, including the full intermediate chain.",
+                                evidence_seq=seq))
+        if t.get("hostname_error"):
+            hits.append(RuleHit("TLS-HOSTNAME", "Certificate does not match the target name",
+                                f"Hostname check failed: {t['hostname_error'][:200]}; SANs {t.get('leaf_sans')}.",
+                                "medium", "Name mismatch defeats server authentication.", "high", "confirmed", "CWE-297",
+                                "Issue a certificate whose SAN covers every name/IP clients use.", evidence_seq=seq))
+        days = t.get("days_until_expiry", 0)
+        if days < 0:
+            hits.append(RuleHit("TLS-EXPIRED", "Certificate has expired", f"notAfter {t.get('leaf_not_after')}.",
+                                "high", "Expired certificates break authentication for all clients.", "high", "confirmed",
+                                "CWE-298", "Renew the certificate and automate renewal.", evidence_seq=seq))
+        elif days < t.get("expiry_warning_days", 30):
+            hits.append(RuleHit("TLS-EXPIRING", f"Certificate expires in {days} days",
+                                f"notAfter {t.get('leaf_not_after')} is within the {t.get('expiry_warning_days')}-day "
+                                "warning window.", "low", "Operational risk of an outage at expiry; no current weakness.",
+                                "high", "confirmed", None, "Renew the certificate; automate renewal.", evidence_seq=seq))
+    legacy = by_probe.get("legacy-only")
+    if legacy and legacy["tls"]["handshake"]:
+        hits.append(RuleHit("TLS-LEGACY", f"Legacy protocol accepted: {legacy['tls']['version']}",
+                            f"Server completed a handshake restricted to TLS 1.0/1.1 (negotiated "
+                            f"{legacy['tls']['version']}, {legacy['tls'].get('cipher_suite')}).", "medium",
+                            "TLS 1.0/1.1 are deprecated (RFC 8996); downgrade exposure depends on client support.",
+                            "high", "confirmed", "CWE-327", "Disable TLS 1.0 and 1.1; require TLS 1.2 or later.",
+                            evidence_seq=int(legacy["seq"])))
+    return hits
+
+
 def evaluate_rules(tool_id: str, target: dict, exchanges: list[dict]) -> list[RuleHit]:
+    if tool_id == "tls.configuration":
+        return evaluate_tls(exchanges)
     finals = [e for e in exchanges if e.get("response")]
     if not finals:
         return []

@@ -74,7 +74,7 @@ class ModelProvider(Protocol):
 class DeterministicTestProvider:
     """Rule-based planner for development and CI. NOT an AI assessment; always labelled as such.
 
-    Runs each allowed tool, in a fixed order (security headers, then allowed methods), one tool per round,
+    Runs each allowed tool, in a fixed order (security headers, TLS configuration, allowed methods), one tool per round,
     against every in-scope (scheme, host, port). Then reports done.
     """
 
@@ -83,17 +83,23 @@ class DeterministicTestProvider:
 
     def propose(self, ctx: PlanningContext) -> ProviderResult:
         allowed = set(ctx.policy.get("allowed_tools", []))
-        sequence = [t for t in ("http.security_headers", "http.allowed_methods") if t in allowed]
+        order = ("http.security_headers", "tls.configuration", "http.allowed_methods")
+        sequence = [t for t in order if t in allowed]
         tool = sequence[ctx.round] if ctx.round < len(sequence) else None
+        schemes_for = {"tls.configuration": {"https"}}
+        params_for: dict[str, dict] = {"tls.configuration": {"expiry_warning_days": 30}}
         steps: list[PlanStep] = []
         if tool:
             for t in ctx.scope["targets"]:
                 for scheme in t["schemes"]:
+                    if scheme not in schemes_for.get(tool, {"http", "https"}):
+                        continue
                     for port in t["ports"]:
                         steps.append(PlanStep(
                             step_id=f"r{ctx.round}-{len(steps)}", tool_id=tool,
                             target=ProposedTarget(scheme=scheme, host=t["host"], port=port),
-                            params={"path": "/"}, rationale=f"deterministic rule: round {ctx.round} runs {tool}"))
+                            params=params_for.get(tool, {"path": "/"}),
+                            rationale=f"deterministic rule: round {ctx.round} runs {tool}"))
         done = ctx.round >= len(sequence) - 1
         return ProviderResult(PlanProposal(steps=steps, done=done, summary=f"deterministic round {ctx.round}: {tool}"),
                               0, self.name, False)

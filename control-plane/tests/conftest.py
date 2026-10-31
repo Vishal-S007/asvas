@@ -146,15 +146,16 @@ def make_assessment(client):
 
 @pytest.fixture(scope="session")
 def target_server():
-    weak, hard = _free_port(), _free_port()
+    weak, hard, tlsp = _free_port(), _free_port(), _free_port()
     flag = Path(os.environ.get("PYTEST_TMP", "/tmp")) / f"asvas-target-fixed-{weak}"
     flag.unlink(missing_ok=True)
     p = subprocess.Popen([sys.executable, str(ROOT / "test-target" / "target.py")],
-                         env={**os.environ, "WEAK_PORT": str(weak), "HARDENED_PORT": str(hard),
+                         env={**os.environ, "WEAK_PORT": str(weak), "HARDENED_PORT": str(hard), "TLS_PORT": str(tlsp),
                               "TARGET_FIXED_FLAG": str(flag)}, stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
     _wait_port(weak)
     _wait_port(hard)
-    yield {"weak": weak, "hardened": hard, "fixed_flag": flag}
+    _wait_port(tlsp)
+    yield {"weak": weak, "hardened": hard, "tls": tlsp, "fixed_flag": flag}
     p.terminate()
     flag.unlink(missing_ok=True)
 

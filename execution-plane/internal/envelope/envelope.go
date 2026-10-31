@@ -67,6 +67,10 @@ type AllowedMethodsParams struct {
 	Path string `json:"path"`
 }
 
+type TLSParams struct {
+	ExpiryWarningDays int `json:"expiry_warning_days"`
+}
+
 var (
 	pathRE = regexp.MustCompile(`^/[A-Za-z0-9/._~\-]{0,255}$`)
 	uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -149,6 +153,18 @@ func (e *Envelope) ToolParams() (any, error) {
 		}
 		if !pathRE.MatchString(p.Path) || strings.Contains(p.Path, "..") {
 			return nil, errors.New("params: invalid path")
+		}
+		return p, nil
+	case "tls.configuration":
+		var p TLSParams
+		if err := strictDecode(e.Params, &p); err != nil {
+			return nil, fmt.Errorf("params: %w", err)
+		}
+		if p.ExpiryWarningDays < 1 || p.ExpiryWarningDays > 365 {
+			return nil, errors.New("params: expiry_warning_days out of range")
+		}
+		if e.Target.Scheme != "https" {
+			return nil, errors.New("tls.configuration requires an https target")
 		}
 		return p, nil
 	default:

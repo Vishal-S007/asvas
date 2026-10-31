@@ -11,6 +11,7 @@ import rego.v1
 catalog := {
 	"http.security_headers": {"risk_tier": "low", "category": "non_destructive", "max_requests": 4},
 	"http.allowed_methods": {"risk_tier": "medium", "category": "non_destructive", "max_requests": 1},
+	"tls.configuration": {"risk_tier": "low", "category": "non_destructive", "max_requests": 2, "schemes": ["https"]},
 }
 
 forbidden_cidrs := [
@@ -27,6 +28,11 @@ tool := catalog[input.action.tool_id]
 deny contains "unknown tool" if not catalog[input.action.tool_id]
 
 deny contains "risk tier mismatch with catalog" if tool.risk_tier != input.action.risk_tier
+
+deny contains "tool does not support this target scheme" if {
+	some schemes in [tool.schemes]
+	not input.target.scheme in schemes
+}
 
 deny contains "destructive actions are not permitted" if input.action.category == "destructive"
 

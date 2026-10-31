@@ -21,7 +21,7 @@ FORBIDDEN_NETWORKS = [ipaddress.ip_network(n) for n in (
 )]
 LOOPBACK_NETWORKS = [ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("::1/128")]
 
-ToolId = Literal["http.security_headers", "http.allowed_methods"]
+ToolId = Literal["http.security_headers", "http.allowed_methods", "tls.configuration"]
 RiskTier = Literal["low", "medium", "high"]
 
 

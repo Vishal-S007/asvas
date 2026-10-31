@@ -171,3 +171,20 @@ def test_retest_marks_resolved(client, make_assessment, deps, executor, target_s
         assert f2["retests"][0]["evidence_ids"]
     finally:
         target_server["fixed_flag"].unlink(missing_ok=True)
+
+
+def test_tls_configuration_check(client, make_assessment, deps, executor, target_server, orchestrator):
+    from tests.conftest import scope_body
+    tls = target_server["tls"]
+    body = scope_body(ports=(tls,), tools=("tls.configuration",))
+    body["scope"]["targets"][0]["schemes"] = ["https"]
+    op = client.as_user("operator@acme.test")
+    a = client.post("/api/v1/assessments", json=body, headers=op).json()
+    assert client.post(f"/api/v1/assessments/{a['id']}/start", headers=op).status_code == 202
+    st = wait_status(client, op, a["id"], {"COMPLETED", "FAILED"}, 60)
+    assert st["status"] == "COMPLETED", st
+    f = _findings(client, op, a["id"])
+    assert {"TLS-UNTRUSTED", "TLS-HOSTNAME", "TLS-EXPIRING", "TLS-LEGACY"} <= set(f), set(f)
+    assert all(x["verification_status"] == "confirmed" for x in f.values())
+    ev = client.get(f"/api/v1/evidence/{f['TLS-LEGACY']['evidence_ids'][0]}", headers=op).json()
+    assert ev["content"]["tls"]["probe"] == "legacy-only" and ev["content"]["tls"]["version"] in ("TLS 1.0", "TLS 1.1")
