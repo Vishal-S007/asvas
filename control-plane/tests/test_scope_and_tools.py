@@ -161,3 +161,13 @@ def test_cvss_scores_are_computed_not_guessed():
 def test_suspected_rules_unscored():
     from asvas.scoring import score
     assert score("BANNER-VERSION")[0] is None
+
+
+def test_same_host_multiple_entries():
+    body = scope_body()
+    body["scope"]["targets"] = [{"host": "127.0.0.1", "ports": [18080], "schemes": ["http"]},
+                                {"host": "127.0.0.1", "ports": [18443], "schemes": ["https"]}]
+    s = Scope.model_validate(body["scope"])
+    assert check_target(s, "http", "127.0.0.1", 18080) == []
+    assert check_target(s, "https", "127.0.0.1", 18443) == []
+    assert check_target(s, "https", "127.0.0.1", 18080)  # scheme/port pairing enforced

@@ -171,12 +171,13 @@ def check_target(scope: Scope, scheme: str, host: str, port: int, resolve_fn=res
     matches = [t for t in scope.targets if t.host == host]
     if not matches:
         return [f"host {host!r} is not a scope target"]
-    t = matches[0]
     reasons = []
-    if port not in t.ports:
-        reasons.append(f"port {port} is not in scope for {host}")
-    if scheme not in t.schemes:
-        reasons.append(f"scheme {scheme} is not in scope for {host}")
+    # A host may appear in several target entries (e.g. :80 over http and :443 over https).
+    if not any(port in t.ports and scheme in t.schemes for t in matches):
+        if not any(port in t.ports for t in matches):
+            reasons.append(f"port {port} is not in scope for {host}")
+        else:
+            reasons.append(f"scheme {scheme} is not in scope for {host}:{port}")
     try:
         ips = resolve_fn(host)
     except OSError as e:

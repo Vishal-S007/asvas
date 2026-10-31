@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -249,6 +249,45 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             _get(conn, aid)
             return rows(conn, "SELECT id, actor, event_type, data, created_at, hash FROM audit_events "
                               "WHERE assessment_id = :a ORDER BY id", a=str(aid))
+
+    @api.get("/assessments/{aid}/events")
+    def events(aid: uuid.UUID, request: Request, p: Principal = Depends(rate_limited),
+               after: int = Query(0, ge=0), max_seconds: int = Query(600, ge=1, le=3600)):
+        """Server-sent events of the assessment's audit events (live status / timeline). Read-only.
+
+        Authenticated with the normal bearer header (clients use fetch streaming, so tokens never go in URLs).
+        """
+        with tenant_tx(p.tenant_id) as conn:
+            _get(conn, aid)
+        last_hdr = request.headers.get("last-event-id")
+        start_after = int(last_hdr) if last_hdr and last_hdr.isdigit() else after
+
+        def gen():
+            last, quiet, started, beat = start_after, 0.0, time.time(), time.time()
+            yield "retry: 3000\n\n"
+            while time.time() - started < max_seconds:
+                with tenant_tx(p.tenant_id) as conn:
+                    evs = rows(conn, "SELECT id, actor, event_type, data, created_at FROM audit_events "
+                                     "WHERE assessment_id = :a AND id > :l ORDER BY id LIMIT 200", a=str(aid), l=last)
+                    st = row(conn, "SELECT status FROM assessments WHERE id = :a", a=str(aid))
+                for e in evs:
+                    last = e["id"]
+                    yield f"id: {e['id']}\nevent: audit\ndata: {json.dumps(e, default=str)}\n\n"
+                if evs:
+                    quiet = 0.0
+                    yield f"event: status\ndata: {json.dumps({'status': st['status'] if st else None})}\n\n"
+                elif st and st["status"] in ("COMPLETED", "FAILED", "CANCELLED", "DRAFT"):
+                    quiet += 1
+                    if quiet >= 5:
+                        yield f"event: end\ndata: {json.dumps({'status': st['status']})}\n\n"
+                        return
+                if time.time() - beat > 15:
+                    beat = time.time()
+                    yield ": keep-alive\n\n"
+                time.sleep(1)
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
     @api.get("/assessments/{aid}/findings")
     def findings(aid: uuid.UUID, p: Principal = Depends(rate_limited)):

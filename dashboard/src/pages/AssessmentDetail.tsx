@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useParams } from "react-router";
 import { api, apiBlob, ApiError, type Approval, type Assessment, type AuditEvent, type Finding, type Job, type PlanNode } from "../api";
 import { can, useMe } from "../App";
-import { useResource } from "../hooks";
+import { useEventStream, useResource } from "../hooks";
 import { Badge, PlannerLabel, StateView, When } from "../ui";
 import { ApprovalCard } from "./Approvals";
 import { PlanGraph } from "./PlanGraph";
@@ -13,7 +13,9 @@ const TABS = ["Overview", "Plan graph", "Jobs", "Findings", "Timeline", "Assets"
 
 export function AssessmentDetailPage() {
   const { id } = useParams();
-  const r = useResource<Assessment>(`/assessments/${id}`, 2000);
+  const stream = useEventStream(`/assessments/${id}/events`);
+  // Live updates come from the event stream; slow polling remains as a fallback if the stream drops.
+  const r = useResource<Assessment>(`/assessments/${id}`, stream.state === "live" ? 15000 : 4000, stream.tick);
   const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
   return (
     <StateView r={r}>
@@ -25,17 +27,17 @@ export function AssessmentDetailPage() {
           </div>
           <div className="statusline">
             <Badge v={a.status} /> <PlannerLabel name={a.provider_name} live={a.provider_is_live_ai} />
-            {ACTIVE.has(a.status) && <span className="small muted"><span className="spinner" /> live — refreshing every 2 s</span>}
+            {ACTIVE.has(a.status) && <span className="small muted"><span className="spinner" /> {stream.state === "live" ? "live event stream" : `event stream ${stream.state} — polling`}</span>}
             {a.failure_reason && <span className="bad">Failure: {a.failure_reason}</span>}
           </div>
           <div className="tabs" role="tablist">
             {TABS.map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
           </div>
           {tab === "Overview" && <Overview a={a} />}
-          {tab === "Plan graph" && <PlanTab id={a.id} active={ACTIVE.has(a.status)} />}
-          {tab === "Jobs" && <JobsTab id={a.id} active={ACTIVE.has(a.status)} />}
+          {tab === "Plan graph" && <PlanTab id={a.id} active={ACTIVE.has(a.status)} tick={stream.tick} />}
+          {tab === "Jobs" && <JobsTab id={a.id} active={ACTIVE.has(a.status)} tick={stream.tick} />}
           {tab === "Findings" && <FindingsTab a={a} />}
-          {tab === "Timeline" && <TimelineTab id={a.id} active={ACTIVE.has(a.status)} />}
+          {tab === "Timeline" && <TimelineTab id={a.id} active={ACTIVE.has(a.status)} tick={stream.tick} />}
           {tab === "Assets" && <AssetsTab id={a.id} />}
           {tab === "Report" && <ReportTab a={a} />}
         </section>
@@ -77,7 +79,7 @@ function Overview({ a }: { a: Assessment }) {
     <div className="grid two">
       <div className="card"><h3>Scope</h3>
         <dl className="kv">
-          <dt>Targets</dt><dd>{s.targets.map((t) => <div key={t.host}><code>{t.host}</code> ports {t.ports.join(", ")} ({t.schemes.join("/")})</div>)}</dd>
+          <dt>Targets</dt><dd>{s.targets.map((t, i) => <div key={i}><code>{t.host}</code> ports {t.ports.join(", ")} ({t.schemes.join("/")})</div>)}</dd>
           <dt>Allowed CIDRs</dt><dd><code>{s.allowed_cidrs.join(", ")}</code></dd>
           <dt>Excluded</dt><dd>{s.excluded_cidrs.length ? <code>{s.excluded_cidrs.join(", ")}</code> : <span className="muted">none</span>}</dd>
           <dt>Authorization</dt><dd>{s.authorization.reference} by {s.authorization.authorized_by}<div className="small muted">{s.authorization.statement}</div>
@@ -108,15 +110,15 @@ function PendingApprovals({ id }: { id: string }) {
   return <div className="card span2"><h3>Waiting for approval</h3><div className="grid">{mine.map((a) => <ApprovalCard key={a.id} a={a} onDone={r.reload} />)}</div></div>;
 }
 
-function PlanTab({ id, active }: { id: string; active: boolean }) {
-  const r = useResource<PlanNode[]>(`/assessments/${id}/plan`, active ? 2000 : 0);
+function PlanTab({ id, active, tick }: { id: string; active: boolean; tick: number }) {
+  const r = useResource<PlanNode[]>(`/assessments/${id}/plan`, active ? 10000 : 0, tick);
   return <StateView r={r} empty={(d) => d.length === 0} emptyText="No plan yet (assessment not started or planning in progress).">
     {(nodes) => <PlanGraph nodes={nodes} />}
   </StateView>;
 }
 
-function JobsTab({ id, active }: { id: string; active: boolean }) {
-  const r = useResource<Job[]>(`/assessments/${id}/jobs`, active ? 2000 : 0);
+function JobsTab({ id, active, tick }: { id: string; active: boolean; tick: number }) {
+  const r = useResource<Job[]>(`/assessments/${id}/jobs`, active ? 10000 : 0, tick);
   return <StateView r={r} empty={(d) => d.length === 0} emptyText="No jobs.">
     {(jobs) => <div className="tablewrap"><table>
       <thead><tr><th>Tool</th><th>Target</th><th>Params</th><th>Risk</th><th>Status</th><th>Attempt</th><th>Policy</th><th>Executor</th></tr></thead>
@@ -190,8 +192,8 @@ function EvidenceDrawer({ id, onClose }: { id: string; onClose: () => void }) {
   );
 }
 
-function TimelineTab({ id, active }: { id: string; active: boolean }) {
-  const r = useResource<AuditEvent[]>(`/assessments/${id}/timeline`, active ? 2000 : 0);
+function TimelineTab({ id, active, tick }: { id: string; active: boolean; tick: number }) {
+  const r = useResource<AuditEvent[]>(`/assessments/${id}/timeline`, active ? 10000 : 0, tick);
   return <StateView r={r} empty={(d) => d.length === 0}>
     {(evs) => <ol className="timeline">{evs.map((e) => (
       <li key={e.id}><When t={e.created_at} /> <b>{e.event_type}</b> <span className="muted small">{e.actor}</span>
@@ -258,7 +260,7 @@ function ReportTab({ a }: { a: Assessment }) {
     <h3 style={{ marginTop: 16 }}>Rendered documents</h3>
     <StateView r={docs} empty={(d) => d.length === 0} emptyText="No PDF rendered yet.">
       {(d) => <div className="tablewrap"><table><thead><tr><th>Requested</th><th>Status</th><th>SHA-256</th><th>Size</th><th /></tr></thead>
-        <tbody>{d.map((x) => <tr key={x.id}><td><When t={x.created_at} /></td><td><Badge v={x.status === "READY" ? "SUCCEEDED" : x.status === "FAILED" ? "FAILED" : "QUEUED"} /> {x.status}{x.error && <div className="small bad">{x.error}</div>}</td>
+        <tbody>{d.map((x) => <tr key={x.id}><td><When t={x.created_at} /></td><td><span className={`badge ${x.status === "READY" ? "ok" : x.status === "FAILED" ? "bad" : "info"}`}>{x.status.toLowerCase()}</span>{x.error && <div className="small bad">{x.error}</div>}</td>
           <td><code className="hash">{x.sha256 ?? "—"}</code></td><td>{x.size_bytes ? `${Math.round(x.size_bytes / 1024)} KB` : "—"}</td>
           <td>{x.status === "READY" && <button className="link" onClick={() => getPdf(x.id)}>Download PDF</button>}</td></tr>)}</tbody></table></div>}
     </StateView>

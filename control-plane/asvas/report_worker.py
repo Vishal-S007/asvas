@@ -7,6 +7,7 @@ import io
 import json
 import logging
 from typing import Any
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -14,7 +15,6 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import text
-from xml.sax.saxutils import escape
 
 from asvas import audit
 from asvas.canonical import sha256_hex
