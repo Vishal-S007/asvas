@@ -1,5 +1,34 @@
 # Progress Log
 
+## 2026-10-31 — Milestone 2 (correlation & depth) — in progress
+
+### Completed in M2 (each committed after its checks passed)
+- `a352e2f` Neo4j 5.26.12 graph projection (DA-03): idempotent, tenant-scoped, failure-tolerant (audited), resync CLI,
+  topology view in dashboard. PostgreSQL remains source of truth.
+- `1f5bf94` `tls.configuration` check (PO-17): Go handshake probes (default + TLS 1.0/1.1-only), deterministic TLS rules,
+  https-only in Rego; local target gained a weak TLS port (self-signed, `localhost`-only SAN, 10-day cert, TLS 1.0+).
+- `6ff05c9` Scope-violation lockdown (SC-06), `require_kernel_egress` per-run isolation requirement (SC-08),
+  Redis token-bucket rate limiter (CP-06), provider circuit breaker + explicit, labelled deterministic fallback (PL-07).
+- `d7d0fd8` CVSS 4.0 base scores per rule via FIRST algorithm (`cvss` library, LGPLv3+); suspected findings unscored (DA-09 partial).
+- `85f22f3` PDF reports rendered in memory by a separate `asvas report-worker` (DA-11).
+- `2192d12` Live server-sent event stream + streaming dashboard client (UI-01); fixed scope check for one host listed
+  in several target entries.
+
+### Verification (2026-10-31, this sandbox, root)
+- OPA: `opa check --strict` OK, `opa test` **21/21**.
+- Go: gofmt/vet clean, **19 tests pass** (adds TLS probe + kernel-egress requirement tests).
+- Python: ruff clean, **93 pytest pass** (adds Neo4j, TLS E2E with real executor, CVSS, PDF worker, SSE, lockdown,
+  circuit breaker tests). Neo4j tests ran against a real local Neo4j 5.26.12.
+- Dashboard: `tsc` clean, `vite build` OK; Playwright run of HTTP+TLS assessment → live stream → findings →
+  Neo4j topology → PDF render/download: no console errors (one duplicate-key warning found and fixed).
+
+### Not verified
+- `docker-compose.yml` (no Docker daemon here); GitHub Actions (no remote); Anthropic provider live.
+
+### Exact next task
+M3 preparation that needs no new infrastructure: gRPC/protobuf execution contract (PO-06) replacing the JSON
+envelope schema, with the HMAC signature kept over the serialized bytes.
+
 ## 2026-10-31 — Milestone 1 (first runnable vertical slice) — complete
 
 Branch `feature/m1-vertical-slice` (local only; no remote configured — see "Unresolved decisions").

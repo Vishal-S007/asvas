@@ -23,7 +23,7 @@ milestone is tested against a running system. Sequencing is not removal: every r
 10. Dashboard.
 11. Tests: unit + integration + e2e; CI workflow.
 
-## M2 — Correlation and depth
+## M2 — Correlation and depth (status: see progress.md; gRPC contract moved to M3)
 - Neo4j `GraphStore` adapter (DA-03); asset correlation across checks.
 - gRPC/protobuf execution contract (PO-06); token-bucket rate limiter (CP-06).
 - Provider circuit breaker + fallback chain (PL-07); CVSS 4.0 calculator (DA-09).
