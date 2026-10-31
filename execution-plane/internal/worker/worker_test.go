@@ -379,3 +379,20 @@ func TestKernelEgressBlocksNonAllowlisted(t *testing.T) {
 		t.Fatal("target was contacted")
 	}
 }
+
+func TestKernelEgressRequirementEnforced(t *testing.T) {
+	f := setup(t, nil)
+	defer f.close()
+	sb := f.w.sb.(*sandbox.DevProcess)
+	req := func(e map[string]any) { e["policy"].(map[string]any)["require_kernel_egress"] = true }
+	sb.SetEgressMode("app-pinned-only (simulated: nftables unavailable)")
+	if r := f.exec(t, f.envelope(req)); r.Status != "DENIED" || !strings.Contains(r.Error, "kernel egress") {
+		t.Fatalf("ran without kernel egress: %s %s", r.Status, r.Error)
+	}
+	if sb.Egress() != nil {
+		sb.SetEgressMode("nftables-per-uid+app-pinned")
+		if r := f.exec(t, f.envelope(req)); r.Status != "SUCCEEDED" {
+			t.Fatalf("enforced egress but denied: %s %s", r.Status, r.Error)
+		}
+	}
+}

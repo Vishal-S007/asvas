@@ -321,3 +321,19 @@ def test_planning_checkpoints_are_durable(client, make_assessment, deps):
     state = deps.checkpointer.get_tuple({"configurable": {"thread_id": f"{a['id']}:0"}})
     assert state is not None and state.checkpoint["channel_values"]["accepted"]
     deps.checkpointer.conn.close()
+
+
+def test_execution_plane_scope_denial_locks_assessment(client, make_assessment, deps):
+    aid, op = start(client, make_assessment, deps, ports=(18080,))
+    [job] = jobs_of(aid)
+    body = json.dumps({"job_id": str(job["id"]), "attempt": 1, "tenant_id": str(job["tenant_id"]),
+                       "assessment_id": aid, "worker_id": "pytest", "status": "DENIED",
+                       "error": "execution-plane policy denied: [10.9.9.9 is outside allowed_cidrs]",
+                       "policy_decision": {"allow": False, "deny_reasons": ["10.9.9.9 is outside allowed_cidrs"]},
+                       "exchanges": []})
+    assert engine.ingest_result(deps, body, hmac_hex(get_settings().derived_key("result"), body)) == "ok"
+    a = client.get(f"/api/v1/assessments/{aid}", headers=op).json()
+    assert a["status"] == "FAILED" and "scope violation" in a["failure_reason"]
+    assert deps.r.get(bus.halt_key_assessment(aid)) == "failed"
+    tl = client.get(f"/api/v1/assessments/{aid}/timeline", headers=op).json()
+    assert any(e["event_type"] == "scope_violation.lockdown" for e in tl)

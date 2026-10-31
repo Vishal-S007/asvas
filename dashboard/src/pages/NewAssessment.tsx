@@ -32,6 +32,7 @@ export function NewAssessmentPage() {
   const [until, setUntil] = useState(localInput(new Date(now.getTime() + 24 * 3600000)));
   const [tools, setTools] = useState<string[]>(["http.security_headers", "http.allowed_methods"]);
   const [mediumApproval, setMediumApproval] = useState(true);
+  const [kernelEgress, setKernelEgress] = useState(false);
   const [timeout, setTimeoutS] = useState(20);
   const [rps, setRps] = useState(2);
   const [maxReq, setMaxReq] = useState(100);
@@ -55,7 +56,8 @@ export function NewAssessmentPage() {
             valid_from: new Date(from).toISOString(), valid_until: new Date(until).toISOString() },
         },
         testing_policy: { allowed_tools: tools, approval_required_risk_tiers: mediumApproval ? ["medium", "high"] : ["high"],
-          job_timeout_seconds: timeout, max_requests_per_second: rps, max_total_requests: maxReq },
+          job_timeout_seconds: timeout, max_requests_per_second: rps, max_total_requests: maxReq,
+          require_kernel_egress: kernelEgress },
       };
       const a = await api<Assessment>("/assessments", { method: "POST", body });
       nav(`/assessments/${a.id}`);
@@ -107,6 +109,8 @@ export function NewAssessmentPage() {
           ))}
           <label className="check"><input type="checkbox" checked={mediumApproval} onChange={(e) => setMediumApproval(e.target.checked)} />
             Require human approval for medium-risk actions (high-risk always requires approval)</label>
+          <label className="check"><input type="checkbox" checked={kernelEgress} onChange={(e) => setKernelEgress(e.target.checked)} />
+            Refuse to run unless the executor proves kernel-level egress filtering (nftables)</label>
           <div className="row">
             <label>Job timeout (s, ≤30)<input type="number" min={5} max={30} value={timeout} onChange={(e) => setTimeoutS(+e.target.value)} /></label>
             <label>Requests/second (≤10)<input type="number" min={1} max={10} value={rps} onChange={(e) => setRps(+e.target.value)} /></label>

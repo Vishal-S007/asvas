@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     anthropic_base_url: str = "https://api.anthropic.com"
     model_timeout_seconds: float = 10.0  # spec p.54: < 10 s
+    # What to do when the live model fails: "none" = fail the planning round honestly (default);
+    # "deterministic-test" = continue with the rule-based planner, recorded and shown as NOT AI.
+    model_fallback: str = Field(default="none", pattern="^(none|deterministic-test)$")
 
     # Local test environments: loopback targets are refused unless explicitly enabled.
     allow_loopback_targets: bool = False

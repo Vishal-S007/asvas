@@ -49,6 +49,13 @@ deny contains "tool not allowed by testing policy" if {
 
 deny contains "assessment emergency-stopped or cancelled" if input.context.halted == true
 
+# Per-run isolation requirement (SC-08): the executor must prove kernel-level egress filtering is active.
+deny contains "testing policy requires kernel egress enforcement, which this executor does not provide" if {
+	input.policy.require_kernel_egress == true
+	input.context.plane == "execution"
+	not input.context.kernel_egress == true
+}
+
 deny contains "authorization window not active" if {
 	not authorization_active
 }

@@ -162,3 +162,10 @@ test_tls_tool_requires_https if {
 	})
 	decision.allow with input as https
 }
+
+test_kernel_egress_requirement if {
+	inp := object.union(base, {"policy": object.union(base.policy, {"require_kernel_egress": true})})
+	decision.allow with input as inp
+	not decision.allow with input as object.union(inp, {"context": object.union(base.context, {"plane": "execution", "kernel_egress": false})})
+	decision.allow with input as object.union(inp, {"context": object.union(base.context, {"plane": "execution", "kernel_egress": true})})
+}

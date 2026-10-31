@@ -129,3 +129,38 @@ def test_missing_api_key_refuses(monkeypatch):
     monkeypatch.setattr(get_settings(), "anthropic_api_key", None)
     with pytest.raises(ProviderError, match="not configured"):
         AnthropicProvider()
+
+
+def test_circuit_breaker_opens_and_recovers():
+    from asvas.planning.providers import CircuitBreaker
+    now = [0.0]
+    cb = CircuitBreaker(threshold=2, cooldown=30, clock=lambda: now[0])
+    calls = []
+
+    def fail():
+        calls.append(1)
+        raise ProviderError("boom")
+    for _ in range(2):
+        with pytest.raises(ProviderError, match="boom"):
+            cb.call(fail)
+    with pytest.raises(ProviderError, match="circuit open"):
+        cb.call(fail)
+    assert len(calls) == 2  # third call short-circuited
+    now[0] = 31
+    assert cb.call(lambda: "ok") == "ok" and cb.failures == 0
+
+
+def test_fallback_is_labelled_not_ai():
+    from asvas.planning.providers import CircuitBreaker, DeterministicTestProvider, GuardedProvider
+
+    class Down:
+        name, is_live_ai = "anthropic:test", True
+
+        def propose(self, ctx):
+            raise ProviderError("HTTP 529")
+    ctx = _ctx()
+    with pytest.raises(ProviderError):
+        GuardedProvider(Down(), CircuitBreaker()).propose(ctx)
+    res = GuardedProvider(Down(), CircuitBreaker(), DeterministicTestProvider()).propose(ctx)
+    assert res.provider_name == "deterministic-test" and res.is_live_ai is False
+    assert "fallback after primary failure" in res.proposal.summary

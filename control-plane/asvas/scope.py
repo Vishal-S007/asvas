@@ -122,6 +122,8 @@ class TestingPolicy(Strict):
     max_plan_depth: int = Field(default=15, ge=1, le=15)  # spec p.9: D_max = 15
     max_jobs: int = Field(default=50, ge=1, le=200)
     max_attempts: int = Field(default=2, ge=1, le=3)
+    # SC-08: refuse to run unless the executor proves kernel egress filtering (nftables) is active.
+    require_kernel_egress: bool = False
 
     @model_validator(mode="after")
     def _high_always(self) -> TestingPolicy:

@@ -37,7 +37,7 @@ def build_input(*, tool_id: str, risk_tier: str, category: str, max_requests: in
         "policy": policy,
         "approval": approval or {"present": False},
         "context": {"now_unix": int(time.time()), "loopback_allowed": s.allow_loopback_targets,
-                    "protected_ports": s.protected_ports, "halted": halted},
+                    "protected_ports": s.protected_ports, "halted": halted, "plane": "control"},
     }
 
 

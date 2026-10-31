@@ -42,6 +42,25 @@ def problem(status: int, title: str, detail: Any = None, type_: str = "about:bla
     return JSONResponse(body, status_code=status, media_type="application/problem+json")
 
 
+# Atomic Redis token bucket (spec p.86-87): capacity = per-minute limit, refilled continuously.
+_BUCKET = """
+local cap = tonumber(ARGV[1]); local rate = cap / 60000.0; local now = tonumber(ARGV[2])
+local b = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(b[1]) or cap; local ts = tonumber(b[2]) or now
+tokens = math.min(cap, tokens + (now - ts) * rate)
+local ok = 0
+if tokens >= 1 then tokens = tokens - 1; ok = 1 end
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('PEXPIRE', KEYS[1], 120000)
+return {ok, math.ceil((1 - tokens) / rate / 1000)}
+"""
+
+
+def token_bucket(r, key: str, per_minute: int) -> tuple[bool, int]:
+    ok, retry = r.eval(_BUCKET, 1, key, per_minute, int(time.time() * 1000))
+    return bool(ok), max(1, int(retry))
+
+
 def create_app(deps: Deps | None = None) -> FastAPI:
     s = get_settings()
     app = FastAPI(title="ASVAS Control Plane", version="0.1.0-m1",
@@ -74,13 +93,10 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return request.app.state.deps
 
     def rate_limited(request: Request, p: Principal = Depends(require("viewer"))) -> Principal:
-        r = deps_of(request).r
-        key = f"asvas:rl:{p.tenant_id}:{int(time.time() // 60)}"
-        n = r.incr(key)
-        if n == 1:
-            r.expire(key, 70)
-        if n > s.rate_limit_per_minute:
-            raise HTTPException(429, "tenant rate limit exceeded (100 requests/minute)")
+        allowed, retry = token_bucket(deps_of(request).r, f"asvas:tb:{p.tenant_id}", s.rate_limit_per_minute)
+        if not allowed:
+            raise HTTPException(429, f"tenant rate limit exceeded ({s.rate_limit_per_minute} requests/minute)",
+                                headers={"Retry-After": str(retry)})
         return p
 
     def role(name: str):

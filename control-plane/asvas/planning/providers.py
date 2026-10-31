@@ -162,8 +162,60 @@ class AnthropicProvider:
         return ProviderResult(proposal, tokens, self.name, True)
 
 
+class CircuitBreaker:
+    """Opens after `threshold` consecutive provider failures; while open, calls fail fast for `cooldown` seconds."""
+
+    def __init__(self, threshold: int = 3, cooldown: float = 60.0, clock=None):
+        import time as _t
+        self.threshold, self.cooldown, self.clock = threshold, cooldown, clock or _t.monotonic
+        self.failures = 0
+        self.opened_at: float | None = None
+
+    def call(self, fn):
+        if self.opened_at is not None:
+            if self.clock() - self.opened_at < self.cooldown:
+                raise ProviderError("model provider circuit open (recent consecutive failures); not called")
+            self.opened_at = None  # half-open: allow one trial
+        try:
+            out = fn()
+        except ProviderError:
+            self.failures += 1
+            if self.failures >= self.threshold:
+                self.opened_at = self.clock()
+            raise
+        self.failures = 0
+        return out
+
+
+class GuardedProvider:
+    """Primary provider behind a circuit breaker, with an optional *explicitly configured* fallback.
+
+    The result always names the provider that actually produced the plan, so a fallback to the deterministic
+    planner is recorded and displayed as not-AI. Without a configured fallback a failure stays a failure.
+    """
+
+    def __init__(self, primary: ModelProvider, breaker: CircuitBreaker, fallback: ModelProvider | None = None):
+        self.primary, self.breaker, self.fallback = primary, breaker, fallback
+        self.name = primary.name
+        self.is_live_ai = primary.is_live_ai
+
+    def propose(self, ctx: PlanningContext) -> ProviderResult:
+        try:
+            return self.breaker.call(lambda: self.primary.propose(ctx))
+        except ProviderError as e:
+            if self.fallback is None:
+                raise
+            res = self.fallback.propose(ctx)
+            res.proposal.summary = f"[fallback after primary failure: {e}] {res.proposal.summary}"[:1000]
+            return res
+
+
+_BREAKER = CircuitBreaker()
+
+
 def get_provider() -> ModelProvider:
     s = get_settings()
     if s.model_provider == "anthropic":
-        return AnthropicProvider()
+        fallback = DeterministicTestProvider() if s.model_fallback == "deterministic-test" else None
+        return GuardedProvider(AnthropicProvider(), _BREAKER, fallback)
     return DeterministicTestProvider()

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -334,7 +335,8 @@ func (w *Worker) policyInput(env *envelope.Envelope, resolved []any, approval ma
 		"policy":   raw(env.Policy),
 		"approval": approval,
 		"context": map[string]any{"now_unix": time.Now().Unix(), "loopback_allowed": w.cfg.Net.AllowLoopback,
-			"protected_ports": pp, "halted": false},
+			"protected_ports": pp, "halted": false, "plane": "execution",
+			"kernel_egress": strings.HasPrefix(w.sb.Info().EgressMode, "nftables")},
 	}
 }
 

@@ -549,8 +549,25 @@ def ingest_result(deps: Deps, body: str, sig: str) -> str:
         assessment_id = a["id"]
     if status == "SUCCEEDED":
         sync_graph(deps, tenant_id, assessment_id)
+    if status == "DENIED" and _is_scope_violation(res):
+        # SC-06: the control plane validated this job as in scope, yet the execution plane found it out of scope
+        # (DNS change, rebinding, tampering). Lock the assessment instead of continuing.
+        with _tx(deps, tenant_id) as conn:
+            audit.record(conn, tenant_id, "system:orchestrator", "scope_violation.lockdown",
+                         {"job_id": job_id, "error": res.get("error")}, assessment_id)
+        _fail(deps, tenant_id, assessment_id, "scope violation detected by the execution plane; assessment locked")
+        return "ok"
     advance(deps, tenant_id, assessment_id)
     return "ok"
+
+
+SCOPE_MARKERS = ("outside allowed_cidrs", "not an in-scope target", "globally forbidden", "excluded_cidrs",
+                 "rebinding", "not in execution-plane allowlist", "loopback targets are disabled", "protected platform port")
+
+
+def _is_scope_violation(res: dict) -> bool:
+    text_ = " ".join([res.get("error") or ""] + list((res.get("policy_decision") or {}).get("deny_reasons") or []))
+    return any(m in text_ for m in SCOPE_MARKERS)
 
 
 def sync_graph(deps: Deps, tenant_id, assessment_id) -> str | None:
