@@ -55,6 +55,14 @@ class Deps:
     provider_factory: Callable[[], ModelProvider] = get_provider
     resolve_fn: Callable[[str], list[str]] = resolve
     checkpointer: Any = None
+    graph: Any = None
+
+    @property
+    def graph_store(self):
+        if self.graph is None:
+            from asvas.graphstore import get_graph_store
+            self.graph = get_graph_store()
+        return self.graph
 
     @property
     def r(self) -> redis.Redis:
@@ -539,8 +547,20 @@ def ingest_result(deps: Deps, body: str, sig: str) -> str:
             conn.execute(text("UPDATE finding_retests SET outcome='inconclusive', completed_at=now() WHERE job_id=:j "
                               "AND outcome='pending'"), {"j": job_id})
         assessment_id = a["id"]
+    if status == "SUCCEEDED":
+        sync_graph(deps, tenant_id, assessment_id)
     advance(deps, tenant_id, assessment_id)
     return "ok"
+
+
+def sync_graph(deps: Deps, tenant_id, assessment_id) -> str | None:
+    """Project committed PostgreSQL state into the graph store; failures are audited, never fatal."""
+    from asvas.graphstore import project
+    with _tx(deps, tenant_id) as conn:
+        err = project(deps.graph_store, conn, tenant_id, assessment_id)
+        if err:
+            audit.record(conn, tenant_id, "system:graph", "graph.sync_failed", {"error": err}, assessment_id)
+    return err
 
 
 def _maybe_retry(conn, tenant_id, a: dict, job: dict) -> None:

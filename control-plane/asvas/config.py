@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     # Ports of the platform itself; never valid targets even on loopback.
     protected_ports: list[int] = [5432, 6379, 8000, 8181, 5173, 7474, 7687, 6333]
 
+    # Graph projection (Neo4j). Empty URI disables it; PostgreSQL stays the source of truth either way.
+    neo4j_uri: str = ""
+    neo4j_user: str = "neo4j"
+    neo4j_password: SecretStr = SecretStr("")
+
     rate_limit_per_minute: int = 100  # spec p.86
     approval_ttl_minutes: int = 15
     dispatch_grace_seconds: int = 20

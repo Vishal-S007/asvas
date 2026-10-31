@@ -6,6 +6,7 @@ import { useResource } from "../hooks";
 import { Badge, PlannerLabel, StateView, When } from "../ui";
 import { ApprovalCard } from "./Approvals";
 import { PlanGraph } from "./PlanGraph";
+import { Topology } from "./Topology";
 
 const ACTIVE = new Set(["PLANNING", "RUNNING", "AWAITING_APPROVAL", "REPORTING", "CANCELLING"]);
 const TABS = ["Overview", "Plan graph", "Jobs", "Findings", "Timeline", "Assets", "Report"] as const;
@@ -201,7 +202,9 @@ function AssetsTab({ id }: { id: string }) {
   const r = useResource<{ assets: { id: string; kind: string; identifier: string; attributes: Record<string, unknown>; last_seen: string }[]; relations: { src_asset: string; dst_asset: string; relation: string }[] }>(`/assessments/${id}/assets`);
   return <StateView r={r} empty={(d) => d.assets.length === 0} emptyText="No assets observed yet.">
     {(d) => <>
-      <p className="small muted">Asset correlation is stored in PostgreSQL in this milestone; the Neo4j graph store is planned (DA-03).</p>
+      <h3>Topology (graph store)</h3>
+      <Topology id={id} />
+      <h3>Assets (PostgreSQL — source of truth)</h3>
       <div className="tablewrap"><table><thead><tr><th>Kind</th><th>Identifier</th><th>Attributes (untrusted)</th><th>Last seen</th><th>Relations</th></tr></thead>
         <tbody>{d.assets.map((x) => <tr key={x.id}><td>{x.kind}</td><td><code>{x.identifier}</code></td><td><code className="small">{JSON.stringify(x.attributes)}</code></td>
           <td><When t={x.last_seen} /></td>

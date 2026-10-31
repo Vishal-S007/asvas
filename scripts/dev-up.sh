@@ -16,6 +16,10 @@ start() { # name, cmd...
 }
 
 OPA="${OPA_BIN:-$ROOT/.tools/opa}"
+if [ -x "$ROOT/.tools/neo4j/bin/neo4j" ] && [ -n "${ASVAS_NEO4J_URI:-}" ]; then
+  "$ROOT/.tools/neo4j/bin/neo4j" status >/dev/null 2>&1 || "$ROOT/.tools/neo4j/bin/neo4j" start >/dev/null 2>&1
+  echo "neo4j started (graph projection enabled)"
+fi
 start opa "$OPA" run --server --addr 127.0.0.1:8181 --log-level error "$ROOT/policies/asvas/decision.rego"
 (cd control-plane && uv run asvas migrate >/dev/null && uv run asvas seed-dev >/dev/null)
 start target python3 test-target/target.py

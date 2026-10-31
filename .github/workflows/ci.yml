@@ -42,6 +42,10 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 5s --health-retries 10
       redis: { image: "redis:7", ports: ["6379:6379"] }
+      neo4j:
+        image: neo4j:5.26.12-community
+        env: { NEO4J_AUTH: "neo4j/asvas_neo4j_dev" }
+        ports: ["7687:7687"]
     defaults: { run: { working-directory: control-plane } }
     env:
       PGPASSWORD: postgres

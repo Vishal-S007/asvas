@@ -1,0 +1,20 @@
+# Local dependencies for development (alternative to native installs). Development credentials only.
+# NOTE: not exercised in the original build environment (no Docker daemon there); see docs/progress.md.
+services:
+  postgres:
+    image: postgres:16.10
+    environment: { POSTGRES_PASSWORD: postgres }
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["./scripts/db-bootstrap.sql:/docker-entrypoint-initdb.d/10-asvas.sql:ro"]
+  redis:
+    image: redis:7.4
+    ports: ["127.0.0.1:6379:6379"]
+  opa:
+    image: openpolicyagent/opa:1.21.4
+    command: ["run", "--server", "--addr", "0.0.0.0:8181", "--log-level", "error", "/policies/asvas/decision.rego"]
+    ports: ["127.0.0.1:8181:8181"]
+    volumes: ["./policies:/policies:ro"]
+  neo4j:
+    image: neo4j:5.26.12-community
+    environment: { NEO4J_AUTH: "neo4j/asvas_neo4j_dev" }
+    ports: ["127.0.0.1:7474:7474", "127.0.0.1:7687:7687"]

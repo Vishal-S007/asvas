@@ -112,6 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     api.add_argument("--port", type=int, default=8000)
     sub.add_parser("orchestrator")
     sub.add_parser("verify-audit")
+    sub.add_parser("graph-resync", help="rebuild the Neo4j projection from PostgreSQL")
     a = p.parse_args(argv)
     if a.cmd == "migrate":
         migrate()
@@ -132,6 +133,21 @@ def main(argv: list[str] | None = None) -> int:
         uvicorn.run(create_app(), host=a.host, port=a.port, log_level="info")
     elif a.cmd == "orchestrator":
         run_orchestrator()
+    elif a.cmd == "graph-resync":
+        from asvas.db import list_tenant_ids, rows, tenant_tx
+        from asvas.orchestration.engine import Deps, sync_graph
+        deps = Deps()
+        if deps.graph_store.name == "disabled":
+            print("graph store disabled (ASVAS_NEO4J_URI unset)", file=sys.stderr)
+            return 2
+        failures = 0
+        for t in list_tenant_ids():
+            with tenant_tx(t) as conn:
+                ids = [r["id"] for r in rows(conn, "SELECT id FROM assessments WHERE started_at IS NOT NULL")]
+            for aid in ids:
+                failures += bool(sync_graph(deps, t, aid))
+        print(f"resynced; failures={failures}")
+        return 1 if failures else 0
     elif a.cmd == "verify-audit":
         from asvas.audit import verify_chain
         from asvas.db import list_tenant_ids, tenant_tx

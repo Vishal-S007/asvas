@@ -252,6 +252,17 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             return {"assets": rows(conn, "SELECT * FROM assets WHERE assessment_id = :a ORDER BY kind, identifier", a=str(aid)),
                     "relations": rows(conn, "SELECT * FROM asset_relations WHERE assessment_id = :a", a=str(aid))}
 
+    @api.get("/assessments/{aid}/graph")
+    def graph(aid: uuid.UUID, request: Request, p: Principal = Depends(rate_limited)):
+        """Topology from the graph store (Neo4j). Tenant id comes from the authenticated principal only."""
+        from asvas.graphstore import GraphUnavailable
+        with tenant_tx(p.tenant_id) as conn:
+            _get(conn, aid)  # 404 for other tenants' assessments before touching the graph store
+        try:
+            return deps_of(request).graph_store.assessment_graph(str(p.tenant_id), str(aid))
+        except GraphUnavailable as e:
+            raise HTTPException(503, f"graph store unavailable: {e}") from e
+
     @api.get("/assessments/{aid}/report")
     def report(aid: uuid.UUID, format: str = Query("json", pattern="^(json|md)$"), p: Principal = Depends(rate_limited)):
         with tenant_tx(p.tenant_id) as conn:
@@ -321,13 +332,13 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         with tenant_tx(p.tenant_id) as conn:
             ctl = row(conn, "SELECT * FROM tenant_controls WHERE tenant_id = :t", t=str(p.tenant_id))
         return {"workers": workers, "redis_ok": redis_ok, "policy_engine": d.policy.health(),
+                "graph_store": d.graph_store.health(),
                 "emergency_stop": bool(ctl and ctl["emergency_stop"]), "emergency_stop_detail": ctl,
                 "planner": {"provider": s.model_provider,
                             "is_live_ai": s.model_provider != "deterministic-test"},
                 "unavailable_features": [
                     {"feature": "Firecracker microVM isolation", "requirement": "PO-10", "reason": "needs KVM host"},
                     {"feature": "eBPF syscall monitor", "requirement": "PO-12", "reason": "needs eBPF-capable host"},
-                    {"feature": "Neo4j asset graph", "requirement": "DA-03", "reason": "planned M2"},
                     {"feature": "Qdrant long-term memory", "requirement": "DA-04", "reason": "planned M3"},
                     {"feature": "OIDC SSO / MFA", "requirement": "CP-07", "reason": "planned M3"},
                     {"feature": "PDF reports", "requirement": "DA-11", "reason": "planned M2"},
