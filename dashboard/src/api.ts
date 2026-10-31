@@ -71,6 +71,7 @@ export interface Finding {
   id: string; asset: string; check_id: string; rule_id: string; title: string; observed_behavior: string; severity: string;
   severity_rationale: string; confidence: string; verification_status: string; state: string; cwe: string | null;
   remediation: string; evidence_ids: string[]; created_at: string; assessment_id: string;
+  cvss_vector: string | null; cvss_score: string | number | null; cvss_severity: string | null;
   retests: { id: string; outcome: string; created_at: string; completed_at: string | null; evidence_ids: string[] }[];
 }
 export interface Approval {

@@ -145,3 +145,19 @@ def test_tls_tool_requires_https_scheme():
     pol = TestingPolicy(allowed_tools=["tls.configuration"]).model_dump()
     out = validate_proposal(p, s, pol, set(), 0, 0)
     assert not out.accepted and "does not support scheme" in " ".join(out.rejected[0][1])
+
+
+def test_cvss_scores_are_computed_not_guessed():
+    from asvas.scoring import RULE_VECTORS, score
+    assert score("METHODS-ADVERTISED") == (None, None, None)
+    for rule, vec in RULE_VECTORS.items():
+        v, s, sev = score(rule)
+        assert v == vec and 0.0 <= s <= 10.0 and sev in ("none", "low", "medium", "high", "critical")
+    # FIRST reference: AV:N/AC:L/AT:N/PR:N/UI:N with full C/I/A impact on the vulnerable system = 9.3
+    from cvss import CVSS4
+    assert float(CVSS4("CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N").base_score) == 9.3
+
+
+def test_suspected_rules_unscored():
+    from asvas.scoring import score
+    assert score("BANNER-VERSION")[0] is None

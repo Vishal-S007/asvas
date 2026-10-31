@@ -17,6 +17,7 @@ from sqlalchemy import Connection, text
 
 from asvas import audit
 from asvas.canonical import canonical_json, sha256_hex
+from asvas.scoring import score
 
 MAX_EVIDENCE_BYTES = 256 * 1024
 VERSION_RE = re.compile(r"[A-Za-z][\w.\-]*/\d+(?:\.\d+)+")
@@ -249,17 +250,21 @@ def record_findings(conn: Connection, tenant_id, assessment_id, job: dict, asset
     for hit in hits:
         fp = finding_fingerprint(hit.rule_id, service, hit.key)
         ev = [str(evidence_ids[hit.evidence_seq])]
+        cv, cs, csev = score(hit.rule_id)
         fid = conn.execute(text(
             "INSERT INTO findings (tenant_id, assessment_id, asset_id, job_id, check_id, rule_id, title, observed_behavior, "
-            "severity, severity_rationale, confidence, verification_status, cwe, remediation, evidence_ids, fingerprint) "
-            "VALUES (:t,:a,:asset,:j,:check,:rule,:title,:obs,:sev,:rat,:conf,:ver,:cwe,:rem,CAST(:ev AS uuid[]),:fp) "
+            "severity, severity_rationale, confidence, verification_status, cwe, remediation, evidence_ids, fingerprint, "
+            "cvss_vector, cvss_score, cvss_severity) "
+            "VALUES (:t,:a,:asset,:j,:check,:rule,:title,:obs,:sev,:rat,:conf,:ver,:cwe,:rem,CAST(:ev AS uuid[]),:fp,"
+            ":cv,:cs,:csev) "
             "ON CONFLICT (assessment_id, fingerprint) DO UPDATE SET updated_at = now(), "
             "evidence_ids = (SELECT array_agg(DISTINCT x) FROM unnest(findings.evidence_ids || EXCLUDED.evidence_ids) x) "
             "RETURNING id, (xmax = 0) AS inserted"),
             {"t": str(tenant_id), "a": str(assessment_id), "asset": str(asset_id), "j": str(job["id"]),
              "check": job["tool_id"], "rule": hit.rule_id, "title": hit.title, "obs": hit.observed,
              "sev": hit.severity, "rat": hit.rationale, "conf": hit.confidence, "ver": hit.verification,
-             "cwe": hit.cwe, "rem": hit.remediation, "ev": "{" + ",".join(ev) + "}", "fp": fp}).first()
+             "cwe": hit.cwe, "rem": hit.remediation, "ev": "{" + ",".join(ev) + "}", "fp": fp,
+             "cv": cv, "cs": cs, "csev": csev}).first()
         if fid.inserted:
             audit.record(conn, tenant_id, "system:evidence", "finding.created",
                          {"finding_id": str(fid.id), "rule_id": hit.rule_id, "severity": hit.severity,

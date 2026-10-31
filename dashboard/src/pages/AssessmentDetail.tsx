@@ -157,6 +157,8 @@ function FindingsTab({ a }: { a: Assessment }) {
             <dt>Check</dt><dd>{f.check_id} / {f.rule_id} {f.cwe && <span className="muted">· {f.cwe}</span>}</dd>
             <dt>Observed</dt><dd>{f.observed_behavior}</dd>
             <dt>Severity rationale</dt><dd>{f.severity_rationale} <span className="muted">(confidence {f.confidence})</span></dd>
+            <dt>CVSS 4.0</dt><dd>{f.cvss_vector ? <><b>{Number(f.cvss_score).toFixed(1)}</b> <Badge v={f.cvss_severity} /> <code className="small">{f.cvss_vector}</code>
+              <div className="small muted">Base metrics only (CVSS-B), rule-assigned; not exploitation-verified.</div></> : <span className="muted">not scored for this rule</span>}</dd>
             <dt>Remediation</dt><dd>{f.remediation}</dd>
             <dt>Recorded</dt><dd><When t={f.created_at} /></dd>
             <dt>Evidence</dt><dd>{f.evidence_ids.map((e) => <button key={e} className="link" onClick={() => setEv(e)}>{e.slice(0, 8)}…</button>)}</dd>

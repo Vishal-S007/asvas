@@ -15,7 +15,8 @@ LIMITATIONS = [
     "it is NOT equivalent to the Firecracker microVM + eBPF isolation in the specification.",
     "Only HTTP configuration checks are implemented; absence of a finding is not evidence of security.",
     "Banner- and advertisement-based observations are 'suspected' and were not verified.",
-    "Severity uses a fixed rule table, not a computed CVSS 4.0 score.",
+    "Severity is a fixed rule table; CVSS 4.0 scores are base-only (CVSS-B) vectors assigned per rule, computed with "
+    "the FIRST algorithm, without threat/environmental metrics and without exploitation.",
     "Evidence is stored unencrypted in PostgreSQL in this milestone.",
 ]
 
@@ -40,6 +41,8 @@ def build_report(conn: Connection, tenant_id, assessment_id) -> dict[str, Any] |
             "severity_rationale": f["severity_rationale"], "confidence": f["confidence"],
             "verification_status": f["verification_status"], "state": f["state"], "cwe": f["cwe"],
             "remediation": f["remediation"],
+            "cvss": {"vector": f["cvss_vector"], "base_score": float(f["cvss_score"]) if f["cvss_score"] is not None else None,
+                     "severity": f["cvss_severity"], "type": "CVSS-B (base only; rule-assigned)"} if f["cvss_vector"] else None,
             "evidence": [{"id": str(e["id"]), "sha256": e["sha256"], "job_id": str(e["job_id"]), "attempt": e["attempt"],
                           "seq": e["seq"]} for e in ev],
             "retest_history": [{"outcome": r["outcome"], "job_id": str(r["job_id"]),
@@ -87,6 +90,8 @@ def render_markdown(rep: dict[str, Any]) -> str:
                   f"- Asset: `{f['asset']}` · Check: `{f['check_id']}` / `{f['rule_id']}` · {f['cwe'] or ''}",
                   f"- Verification: **{f['verification_status']}** · Confidence: {f['confidence']} · State: {f['state']}",
                   f"- Observed: {f['observed_behavior']}", f"- Severity rationale: {f['severity_rationale']}",
+                  f"- CVSS 4.0: {f['cvss']['base_score']} ({f['cvss']['severity']}) `{f['cvss']['vector']}` — base metrics only"
+                  if f["cvss"] else "- CVSS 4.0: not scored for this rule",
                   f"- Remediation: {f['remediation']}",
                   "- Evidence: " + ", ".join(f"`{e['id']}` (sha256 `{e['sha256'][:16]}…`)" for e in f["evidence"])]
         for r in f["retest_history"]:
