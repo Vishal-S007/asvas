@@ -25,6 +25,7 @@ start opa "$OPA" run --server --addr 127.0.0.1:8181 --log-level error "$ROOT/pol
 start target python3 test-target/target.py
 start api bash -c "cd control-plane && exec uv run asvas api"
 start orchestrator bash -c "cd control-plane && exec uv run asvas orchestrator"
+start report-worker bash -c "cd control-plane && exec uv run asvas report-worker"
 (cd execution-plane && go build -o bin/asvas-executor ./cmd/asvas-executor && chmod 755 bin/asvas-executor)
 if [ "$(id -u)" = "0" ]; then
   start executor execution-plane/bin/asvas-executor

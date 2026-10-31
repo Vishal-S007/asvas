@@ -111,6 +111,7 @@ def main(argv: list[str] | None = None) -> int:
     api.add_argument("--host", default="127.0.0.1")
     api.add_argument("--port", type=int, default=8000)
     sub.add_parser("orchestrator")
+    sub.add_parser("report-worker", help="render PDF reports (separate process)")
     sub.add_parser("verify-audit")
     sub.add_parser("graph-resync", help="rebuild the Neo4j projection from PostgreSQL")
     a = p.parse_args(argv)
@@ -133,6 +134,9 @@ def main(argv: list[str] | None = None) -> int:
         uvicorn.run(create_app(), host=a.host, port=a.port, log_level="info")
     elif a.cmd == "orchestrator":
         run_orchestrator()
+    elif a.cmd == "report-worker":
+        from asvas import report_worker
+        report_worker.run()
     elif a.cmd == "graph-resync":
         from asvas.db import list_tenant_ids, rows, tenant_tx
         from asvas.orchestration.engine import Deps, sync_graph

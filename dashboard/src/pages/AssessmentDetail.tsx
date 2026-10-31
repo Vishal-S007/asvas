@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useParams } from "react-router";
-import { api, ApiError, type Approval, type Assessment, type AuditEvent, type Finding, type Job, type PlanNode } from "../api";
+import { api, apiBlob, ApiError, type Approval, type Assessment, type AuditEvent, type Finding, type Job, type PlanNode } from "../api";
 import { can, useMe } from "../App";
 import { useResource } from "../hooks";
 import { Badge, PlannerLabel, StateView, When } from "../ui";
@@ -215,30 +215,53 @@ function AssetsTab({ id }: { id: string }) {
   </StateView>;
 }
 
+interface ReportDoc { id: string; status: string; sha256: string | null; size_bytes: number | null; error: string | null; created_at: string; completed_at: string | null }
+
+function saveBlob(blob: Blob, name: string) {
+  const url = URL.createObjectURL(blob);
+  const el = document.createElement("a");
+  el.href = url; el.download = name; el.click();
+  URL.revokeObjectURL(url);
+}
+
 function ReportTab({ a }: { a: Assessment }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
+  const docs = useResource<ReportDoc[]>(`/assessments/${a.id}/reports`, 3000);
   const download = async (fmt: "json" | "md") => {
     setBusy(true); setErr(undefined);
     try {
       const body = await api<string>(`/assessments/${a.id}/report?format=${fmt}`, { raw: true });
-      const blob = new Blob([body], { type: fmt === "md" ? "text/markdown" : "application/json" });
-      const url = URL.createObjectURL(blob);
-      const el = document.createElement("a");
-      el.href = url; el.download = `asvas-report-${a.id}.${fmt}`; el.click();
-      URL.revokeObjectURL(url);
+      saveBlob(new Blob([body], { type: fmt === "md" ? "text/markdown" : "application/json" }), `asvas-report-${a.id}.${fmt}`);
     } catch (e) { setErr(e instanceof ApiError ? e.title : String(e)); }
     finally { setBusy(false); }
   };
+  const requestPdf = async () => {
+    setErr(undefined);
+    try { await api(`/assessments/${a.id}/reports`, { method: "POST" }); docs.reload(); }
+    catch (e) { setErr(e instanceof ApiError ? e.title : String(e)); }
+  };
+  const getPdf = async (id: string) => {
+    try { saveBlob(await apiBlob(`/reports/${id}/download`), `asvas-report-${id}.pdf`); }
+    catch (e) { setErr(e instanceof ApiError ? e.title : String(e)); }
+  };
   return <div className="card">
     <h3>Report</h3>
-    <p className="small">Generated on demand from stored state: findings, evidence hashes, retest history, audit-chain verification and limitations.
+    <p className="small">Generated from stored state: findings, evidence hashes, CVSS-B scores, retest history, audit-chain check and limitations.
       {a.status !== "COMPLETED" && <b> The assessment is {a.status}; a report now is partial.</b>}</p>
     <div className="actions">
       <button className="btn" disabled={busy} onClick={() => download("json")}>Download JSON</button>
       <button className="btn" disabled={busy} onClick={() => download("md")}>Download Markdown</button>
-      <button className="btn" disabled title="Not implemented in this milestone (DA-11)">PDF — unavailable (DA-11)</button>
+      <button className="btn" onClick={requestPdf}>Render PDF (report worker)</button>
     </div>
     {err && <div className="state error">{err}</div>}
+    <h3 style={{ marginTop: 16 }}>Rendered documents</h3>
+    <StateView r={docs} empty={(d) => d.length === 0} emptyText="No PDF rendered yet.">
+      {(d) => <div className="tablewrap"><table><thead><tr><th>Requested</th><th>Status</th><th>SHA-256</th><th>Size</th><th /></tr></thead>
+        <tbody>{d.map((x) => <tr key={x.id}><td><When t={x.created_at} /></td><td><Badge v={x.status === "READY" ? "SUCCEEDED" : x.status === "FAILED" ? "FAILED" : "QUEUED"} /> {x.status}{x.error && <div className="small bad">{x.error}</div>}</td>
+          <td><code className="hash">{x.sha256 ?? "—"}</code></td><td>{x.size_bytes ? `${Math.round(x.size_bytes / 1024)} KB` : "—"}</td>
+          <td>{x.status === "READY" && <button className="link" onClick={() => getPdf(x.id)}>Download PDF</button>}</td></tr>)}</tbody></table></div>}
+    </StateView>
+    {docs.data?.some((x) => x.status === "QUEUED") && <p className="small muted">Queued documents are rendered by the separate <code>asvas report-worker</code> process; if it is not running they stay queued.</p>}
   </div>;
 }

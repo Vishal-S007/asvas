@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -290,6 +290,47 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             return PlainTextResponse(render_markdown(rep), media_type="text/markdown")
         return rep
 
+    @api.post("/assessments/{aid}/reports", status_code=202)
+    def request_report(aid: uuid.UUID, request: Request, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            _get(conn, aid)
+            rid = conn.execute(text("INSERT INTO reports (tenant_id, assessment_id, requested_by, format, status) "
+                                    "VALUES (:t,:a,:u,'pdf','QUEUED') RETURNING id"),
+                               {"t": str(p.tenant_id), "a": str(aid), "u": str(p.user_id)}).scalar()
+            audit.record(conn, p.tenant_id, p.actor, "report.requested", {"report_id": str(rid), "format": "pdf"}, aid)
+        deps_of(request).r.xadd("asvas:reports", {"message": json.dumps(
+            {"tenant_id": str(p.tenant_id), "report_id": str(rid)})}, maxlen=10000, approximate=True)
+        return {"report_id": str(rid), "status": "QUEUED", "status_url": f"/api/v1/reports/{rid}"}
+
+    @api.get("/assessments/{aid}/reports")
+    def list_reports(aid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            _get(conn, aid)
+            return rows(conn, "SELECT id, format, status, sha256, size_bytes, error, created_at, completed_at "
+                              "FROM reports WHERE assessment_id = :a ORDER BY created_at DESC", a=str(aid))
+
+    @api.get("/reports/{rid}")
+    def get_report(rid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            r = row(conn, "SELECT id, assessment_id, format, status, sha256, size_bytes, error, created_at, completed_at "
+                          "FROM reports WHERE id = :id", id=str(rid))
+        if r is None:
+            raise HTTPException(404, "report not found")
+        return r
+
+    @api.get("/reports/{rid}/download")
+    def download_report(rid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        with tenant_tx(p.tenant_id) as conn:
+            r = row(conn, "SELECT status, content, sha256, assessment_id FROM reports WHERE id = :id", id=str(rid))
+            if r is None:
+                raise HTTPException(404, "report not found")
+            if r["status"] != "READY":
+                raise HTTPException(409, f"report is {r['status']}")
+            audit.record(conn, p.tenant_id, p.actor, "report.downloaded", {"report_id": str(rid)}, r["assessment_id"])
+        return Response(bytes(r["content"]), media_type="application/pdf", headers={
+            "X-Content-SHA256": r["sha256"], "Content-Disposition": f'attachment; filename="asvas-report-{rid}.pdf"',
+            "Cache-Control": "no-store"})
+
     # ------------------------------------------------------------------ approvals
     @api.get("/approvals")
     def approvals(status: str | None = Query(None, pattern="^(PENDING|APPROVED|REJECTED|EXPIRED|INVALIDATED|CONSUMED)$"),
@@ -357,7 +398,6 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                     {"feature": "eBPF syscall monitor", "requirement": "PO-12", "reason": "needs eBPF-capable host"},
                     {"feature": "Qdrant long-term memory", "requirement": "DA-04", "reason": "planned M3"},
                     {"feature": "OIDC SSO / MFA", "requirement": "CP-07", "reason": "planned M3"},
-                    {"feature": "PDF reports", "requirement": "DA-11", "reason": "planned M2"},
                     {"feature": "Compliance mapping", "requirement": "DA-12", "reason": "planned M4"},
                 ]}
 

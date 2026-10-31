@@ -85,7 +85,7 @@ def clean(migrated):
     with eng.begin() as c:
         c.execute(text("TRUNCATE tenants, users, assessments, plan_nodes, jobs, job_results, approvals, evidence, assets, "
                        "asset_relations, findings, finding_retests, audit_events, tenant_controls, "
-                       "checkpoints, checkpoint_blobs, checkpoint_writes CASCADE"))
+                       "checkpoints, checkpoint_blobs, checkpoint_writes, reports CASCADE"))
     seed(eng)
     eng.dispose()
     r = get_redis()

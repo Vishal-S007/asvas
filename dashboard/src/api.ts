@@ -12,6 +12,17 @@ export const tokenStore = {
   clear: () => { try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } },
 };
 
+export async function apiBlob(path: string): Promise<Blob> {
+  const t = tokenStore.get();
+  const res = await fetch(`/api/v1${path}`, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
+  if (!res.ok) {
+    let title = res.statusText;
+    try { title = (await res.json()).title ?? title; } catch { /* ignore */ }
+    throw new ApiError(res.status, title);
+  }
+  return res.blob();
+}
+
 export async function api<T>(path: string, init: { method?: string; body?: unknown; raw?: boolean } = {}): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const t = tokenStore.get();
