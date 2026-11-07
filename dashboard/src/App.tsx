@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
-import { NavLink, Navigate, Route, Routes, useNavigate } from "react-router";
+import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
+import { completeLogin, getAuthConfig, logoutUrl, REAUTH_KEY } from "./oidc";
 import { api, ApiError, rank, tokenStore, type Me, type Role } from "./api";
 import { AssessmentsPage } from "./pages/Assessments";
 import { NewAssessmentPage } from "./pages/NewAssessment";
@@ -22,14 +23,36 @@ export function App() {
   const [persona, setPersona] = useState<Persona>("advanced");
   useEffect(() => { if (me) setPersona(loadPersona(me.user_id)); }, [me]);
   const nav = useNavigate();
+  const loc = useLocation();
+  const [authErr, setAuthErr] = useState<string>();
   const refresh = async () => {
     if (!tokenStore.get()) { setMe(null); setChecked(true); return; }
     try { setMe(await api<Me>("/me")); } catch (e) { if (e instanceof ApiError && e.status === 401) setMe(null); }
     setChecked(true);
   };
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    if (loc.pathname === "/auth/callback") {
+      completeLogin()
+        .then(async () => {
+          try { setMe(await api<Me>("/me")); setChecked(true); nav("/assessments", { replace: true }); }
+          catch (e) {
+            tokenStore.clear();
+            sessionStorage.setItem(REAUTH_KEY, "1");
+            const t = e instanceof ApiError ? e.title : String(e);
+            throw new Error(t.includes("multi-factor") ? "Authenticator registered. For security, sign in once more using a code from your authenticator app." : t);
+          }
+        })
+        .catch((e) => { setAuthErr(String(e instanceof Error ? e.message : e)); setChecked(true); nav("/", { replace: true }); });
+    } else void refresh();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const signOut = async () => {
+    tokenStore.clear(); setMe(null);
+    try { const c = await getAuthConfig(); if (c.oidc && sessionStorage.getItem("asvas.oidc.id_token")) {
+      const u = logoutUrl(c.oidc); sessionStorage.removeItem("asvas.oidc.id_token"); location.assign(u); } } catch { /* local sign-out only */ }
+  };
   if (!checked) return <div className="state loading"><span className="spinner" /> Loading…</div>;
-  if (!me) return <LoginPage onLogin={async () => { await refresh(); nav("/assessments"); }} />;
+  if (!me) return <>{authErr && <div className="state error" role="alert">{authErr}</div>}
+    <LoginPage onLogin={async () => { await refresh(); nav("/assessments"); }} /></>;
   return (
     <MeCtx.Provider value={me}>
      <PersonaCtx.Provider value={{ persona, set: (p) => { setPersona(p); savePersona(me.user_id, p); } }}>
@@ -51,7 +74,7 @@ export function App() {
           <div className="whoami">
             <div>{me.display_name}</div>
             <div className="muted small">{me.email} · <b>{me.role}</b></div>
-            <button className="link" onClick={() => { tokenStore.clear(); setMe(null); }}>Sign out</button>
+            <button className="link" onClick={() => void signOut()}>Sign out</button>
           </div>
         </aside>
         <main>

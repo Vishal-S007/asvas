@@ -148,3 +148,14 @@ as the source of truth.
 - Tested locally: SBOMs control-plane (72 components, CycloneDX 1.6), execution-plane (34, 1.6), dashboard (6, 1.5);
   pip-audit 69 packages / 0 vulns; npm audit 0; govulncheck 0 reachable (after x/net 0.60 -> 0.62; Go tests re-run, pass).
   Confirmed pip-audit exits 1 on a deliberately vulnerable requirement. The CI job itself has not run yet (no push from here).
+
+## M4 batch (started 2026-11-08 03:30 IST)
+
+### CP-07 OIDC SSO + MFA with Keycloak
+- Done: `scripts/keycloak-dev.sh` (start/setup/stop; realm `asvas`, PKCE client, audience + AMR mappers, TOTP required, roles,
+  dev users with random passwords in var/keycloak/, 0600); `asvas/auth.py` OIDC validation; `/auth/config`; dashboard PKCE flow.
+- Tested: `test_oidc.py` 17 passed (valid token; wrong issuer/audience/client/expiry/unverified e-mail/no otp/unknown user/role
+  mismatch/wrong key/alg none; dev tokens refused in production; production config checks).
+  Live e2e (Chromium -> Keycloak -> API): returning user with password + TOTP -> amr ["pwd","otp"], /me OK (operator, auditor);
+  first-time user enrols TOTP -> enrolment-only token refused (no otp) -> forced re-login with code -> OK (approver, globex operator).
+- Full Python suite 166 passed.

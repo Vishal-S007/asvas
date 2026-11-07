@@ -38,6 +38,8 @@ GOBIN=$PWD/.tools go install github.com/open-policy-agent/opa@v1.21.4
 cp .env.example .env            # dev placeholders; never commit .env (defaults to TLS for every local service)
 ./scripts/dev-certs.sh          # writes var/certs/ (git-ignored); dev-up.sh also does this if missing
 sudo ./scripts/dev-tls-services.sh   # PostgreSQL TLS 1.3 required + TLS-only Redis on :6380 (CP-10)
+# optional SSO + MFA (CP-07): Keycloak 26.4.2 unpacked into .tools/keycloak, then
+./scripts/keycloak-dev.sh start && ./scripts/keycloak-dev.sh setup   # passwords: var/keycloak/dev-users.json
 # 4. control plane deps
 (cd control-plane && uv sync --frozen)
 # 5. start OPA, API, orchestrator, executor and the local test target (logs in var/logs/)

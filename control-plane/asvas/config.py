@@ -29,6 +29,13 @@ class Settings(BaseSettings):
 
     jwt_secret: SecretStr = SecretStr(DEV_PLACEHOLDER)
     jwt_ttl_minutes: int = 60
+    # CP-07: enterprise SSO via OIDC (tested with Keycloak). When oidc_issuer is set the API accepts RS256/ES256
+    # access tokens from that issuer (JWKS-verified, audience asvas-api). Outside development it is the only way in.
+    oidc_issuer: str = ""
+    oidc_client_id: str = "asvas-dashboard"
+    oidc_audience: str = "asvas-api"
+    oidc_ca_file: str = ""
+    oidc_require_mfa: bool = True  # access token "amr" must include "otp"
     # Master key for HMAC signing of job envelopes and approval tokens (shared with execution plane).
     signing_key: SecretStr = SecretStr(DEV_PLACEHOLDER)
 
@@ -86,6 +93,10 @@ class Settings(BaseSettings):
                     raise ValueError(f"ASVAS_{name.upper()} must be at least 32 characters")
             if self.allow_loopback_targets:
                 raise ValueError("loopback targets cannot be enabled in production")
+            if not self.oidc_issuer:
+                raise ValueError("ASVAS_OIDC_ISSUER must be set outside development (dev-login is disabled there)")
+            if not self.oidc_require_mfa:
+                raise ValueError("MFA cannot be disabled in production")
             if self.approval_signatures != "required":
                 raise ValueError("approver signatures cannot be disabled in production")
         return self

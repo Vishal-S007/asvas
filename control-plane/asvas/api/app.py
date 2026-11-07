@@ -129,6 +129,17 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         out["env"] = s.env
         return out
 
+    @api.get("/auth/config")
+    def auth_config():
+        """Public: how the dashboard should sign in (CP-07)."""
+        oidc = None
+        if s.oidc_issuer:
+            base = f"{s.oidc_issuer}/protocol/openid-connect"
+            oidc = {"issuer": s.oidc_issuer, "client_id": s.oidc_client_id, "authorization_endpoint": f"{base}/auth",
+                    "token_endpoint": f"{base}/token", "end_session_endpoint": f"{base}/logout",
+                    "scope": "openid email profile", "pkce": "S256"}
+        return {"oidc": oidc, "dev_login": s.env == "development", "mfa_required": s.oidc_require_mfa}
+
     if s.env == "development":
         from asvas.seed import DEV_USERS
 
@@ -493,7 +504,6 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                     {"feature": "Firecracker microVM isolation", "requirement": "PO-10", "reason": "needs KVM host"},
                     {"feature": "eBPF syscall monitor", "requirement": "PO-12", "reason": "needs eBPF-capable host"},
                     {"feature": "Qdrant long-term memory", "requirement": "DA-04", "reason": "planned M3"},
-                    {"feature": "OIDC SSO / MFA", "requirement": "CP-07", "reason": "planned M3"},
                     {"feature": "Compliance mapping", "requirement": "DA-12", "reason": "planned M4"},
                 ]}
 
