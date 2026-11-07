@@ -63,6 +63,7 @@ type DevProcess struct {
 	egress *Egress
 	maxOut int64
 	info   Info
+	issuer *Issuer
 }
 
 func NewDevProcess(slots int) (*DevProcess, error) {
@@ -73,7 +74,11 @@ func NewDevProcess(slots int) (*DevProcess, error) {
 	if override := os.Getenv("ASVAS_SANDBOX_EXE"); override != "" { // used by tests (binary must be readable by sandbox UIDs)
 		exe = override
 	}
-	d := &DevProcess{exe: exe, asRoot: os.Geteuid() == 0, maxOut: 2 << 20}
+	iss, err := NewIssuer()
+	if err != nil {
+		return nil, err
+	}
+	d := &DevProcess{exe: exe, asRoot: os.Geteuid() == 0, maxOut: 2 << 20, issuer: iss}
 	level := "dev-process: separate UID, no capabilities, no_new_privs, rlimits (shared kernel; NOT a microVM)"
 	if !d.asRoot {
 		level = "dev-process-degraded: same UID as executor (executor not running as root)"
@@ -105,8 +110,29 @@ func (d *DevProcess) Run(ctx context.Context, slot int, spec checks.Spec) (check
 		}
 		defer d.egress.Clear(slot)
 	}
+	ttl := time.Duration(max(1000, spec.TimeoutMS))*time.Millisecond + 5*time.Second
+	cred, err := d.issuer.Issue(slot, ttl)
+	if err != nil {
+		return checks.Result{}, err
+	}
+	defer cred.Wipe()
+	spec.Credential, _ = json.Marshal(cred)
 	in, _ := json.Marshal(spec)
-	return d.runChild(ctx, slot, "sandbox-child", in)
+	res, err := d.runChild(ctx, slot, "sandbox-child", in)
+	if err != nil {
+		return res, err
+	}
+	if verr := VerifyResult(cred, res, time.Now()); verr != nil {
+		return checks.Result{}, fmt.Errorf("sandbox result rejected (PO-16): %w", verr)
+	}
+	if res.Attestation == nil {
+		res.Attestation = map[string]any{}
+	}
+	res.Attestation["credential_id"] = cred.ID
+	res.Attestation["credential_expires_unix_ms"] = cred.ExpiresMS
+	res.Attestation["credential_verified"] = true
+	res.CredMAC = ""
+	return res, nil
 }
 
 func (d *DevProcess) runChild(ctx context.Context, slot int, mode string, stdin []byte) (checks.Result, error) {
@@ -222,6 +248,16 @@ func ChildMain(mode string) int {
 		res = checks.Run(ctx, spec)
 	}
 	res.Attestation = att
+	var cred Credential
+	if len(spec.Credential) > 0 {
+		if err := json.Unmarshal(spec.Credential, &cred); err == nil {
+			if err := SignResult(&cred, &res); err != nil {
+				fmt.Fprintln(os.Stderr, "credential:", err)
+			}
+			cred.Wipe()
+		}
+	}
+	spec.Credential = nil
 	_ = json.NewEncoder(os.Stdout).Encode(res)
 	return 0
 }

@@ -78,6 +78,9 @@ def test_complete_local_assessment_workflow(client, make_assessment, deps, execu
     assert len(results) == 4 and all(r["executor_policy"]["allow"] and r["executor_policy"]["plane"] == "execution"
                                      for r in results)
     att = results[0]["sandbox_attestation"]
+    # PO-16: each sandbox run's result was MAC'd with its own short-lived credential, all distinct
+    assert all(r["sandbox_attestation"]["credential_verified"] == "true" for r in results)
+    assert len({r["sandbox_attestation"]["credential_id"] for r in results}) == len(results)
     assert att["nonewprivs"] == "1"
     if os.geteuid() == 0:
         assert int(att["uid"]) >= 62000 and att["capeff"] == "0000000000000000"

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,8 @@ type Spec struct {
 	MaxRequests int                 `json:"max_requests"`
 	RPS         int                 `json:"rps"`
 	TimeoutMS   int64               `json:"timeout_ms"`
+	// Credential is the per-run sandbox credential (PO-16), set by the executor; never logged.
+	Credential json.RawMessage `json:"credential,omitempty"`
 }
 
 type Request struct {
@@ -81,6 +84,8 @@ type Result struct {
 	RequestsUsed int            `json:"requests_used"`
 	Error        string         `json:"error,omitempty"`
 	Attestation  map[string]any `json:"sandbox_attestation,omitempty"`
+	CredID       string         `json:"cred_id,omitempty"`
+	CredMAC      string         `json:"cred_mac,omitempty"`
 }
 
 func find(allow []netguard.Endpoint, scheme, host string, port int) (netguard.Endpoint, bool) {

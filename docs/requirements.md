@@ -82,7 +82,7 @@ Status legend:
 | PO-14 | DNS rebinding & redirect validation | (user req.) 9, 47 | Done | Resolve-once, validate all A/AAAA, pin; each redirect re-validated; tested |
 | PO-15 | Emergency stop kills active workers | (user req.) 62-63 | Done | Admin endpoint → Redis control message + flag; executor kills process groups; tested |
 | PO-17 | TLS configuration validation (spec p.4 'TLS version validation', low risk) | 4 | Done (M2) | `tls.configuration`: ≤2 handshakes (default, TLS1.0/1.1-only); rules TLS-UNTRUSTED/HOSTNAME/EXPIRED/EXPIRING/LEGACY; https-only enforced in Rego |
-| PO-16 | Unique short-lived per-sandbox credentials | 7 | Planned (M3) | N/A for local dev |
+| PO-16 | Unique short-lived per-sandbox credentials | 7, 414 | Done (M4, scope-adjusted) | Each sandbox run gets a fresh credential derived from a per-process random master (unique even for retries in the same slot, TTL = job timeout + 5 s); the sandbox must MAC its result with it before expiry; the executor rejects results from another run, tampered or late; key wiped after use; credential id + verification in the attestation/audit. Tests `cred_test.go`, worker + E2E assertions. Scope: sandboxes need no cloud/IAM access here, so no cloud credentials are issued (STS-style issuer for that case not implemented) |
 
 ## 5. Data, evidence, findings, reporting
 

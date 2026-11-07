@@ -232,6 +232,9 @@ func TestAllowedJobRunsInSandbox(t *testing.T) {
 	if r.Status != "SUCCEEDED" || len(r.Exchanges) != 1 || r.Exchanges[0].Response.Status != 200 {
 		t.Fatalf("unexpected %+v", r)
 	}
+	if r.Attestation["credential_verified"] != true || r.Attestation["credential_id"] == "" {
+		t.Fatalf("sandbox result not bound to a per-run credential (PO-16): %v", r.Attestation)
+	}
 	if r.Attestation["nonewprivs"] != "1" {
 		t.Fatalf("no_new_privs not set in sandbox: %v", r.Attestation)
 	}

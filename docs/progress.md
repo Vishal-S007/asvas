@@ -163,3 +163,7 @@ as the source of truth.
 ### DA-15 Bloom-filter dedupe
 - Done: `asvas/dedupe.py`, Bloom-filtered `correlate_assets`, result size cap. Tested: `test_dedupe.py` 5 passed; full suite 171 passed.
 - Substitution noted: no streaming JSON parser, because results are protobuf with a size cap.
+
+### PO-16 per-sandbox credentials
+- Done: `internal/sandbox/cred.go`; DevProcess issues/verifies per run. Tested: Go `cred_test.go` (3), worker test asserts verified
+  credential, Python E2E asserts 4 distinct verified credential ids across 4 real sandbox runs. All Go packages ok; integration 10 passed.
