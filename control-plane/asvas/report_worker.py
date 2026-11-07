@@ -16,7 +16,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import text
 
-from asvas import audit
+from asvas import audit, crypto
 from asvas.canonical import sha256_hex
 from asvas.db import row, tenant_tx
 from asvas.reporting import build_report
@@ -85,8 +85,11 @@ def handle(engine, message: dict[str, Any]) -> str:
         return "failed"
     digest = sha256_hex(pdf)
     with tenant_tx(tenant_id, engine) as conn:
-        conn.execute(text("UPDATE reports SET status='READY', content=:c, sha256=:h, size_bytes=:n, completed_at=now() "
-                          "WHERE id=:id"), {"c": pdf, "h": digest, "n": len(pdf), "id": report_id})
+        sealed = crypto.keyring().seal(pdf, crypto.report_aad(tenant_id, report_id))
+        conn.execute(text("UPDATE reports SET status='READY', content=:c, sha256=:h, size_bytes=:n, completed_at=now(), "
+                          "enc_alg=:alg, kek_id=:kid, dek_wrapped=:dek WHERE id=:id"),
+                     {"c": sealed.ciphertext, "h": digest, "n": len(pdf), "id": report_id, "alg": sealed.alg,
+                      "kid": sealed.kek_id, "dek": sealed.dek_wrapped})
         audit.record(conn, tenant_id, "system:report-worker", "report.rendered",
                      {"report_id": report_id, "format": "pdf", "sha256": digest, "bytes": len(pdf)}, r["assessment_id"])
     return "ready"

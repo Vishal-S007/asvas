@@ -113,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("orchestrator")
     sub.add_parser("report-worker", help="render PDF reports (separate process)")
     sub.add_parser("verify-audit")
+    keys = sub.add_parser("keys", help="key ring: status | rotate | rewrap")
+    keys.add_argument("action", choices=["status", "rotate", "rewrap"])
     sub.add_parser("graph-resync", help="rebuild the Neo4j projection from PostgreSQL")
     a = p.parse_args(argv)
     if a.cmd == "migrate":
@@ -137,6 +139,9 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "report-worker":
         from asvas import report_worker
         report_worker.run()
+    elif a.cmd == "keys":
+        from asvas import keymgmt
+        print(json.dumps(getattr(keymgmt, a.action)(), indent=2))
     elif a.cmd == "graph-resync":
         from asvas.db import list_tenant_ids, rows, tenant_tx
         from asvas.orchestration.engine import Deps, sync_graph

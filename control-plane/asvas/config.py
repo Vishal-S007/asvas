@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     executor_tls_cert: str = ""
     executor_tls_key: str = ""
 
+    # Key ring for envelope encryption at rest (local-file KMS stand-in; must be outside the repo, mode 0600).
+    keyring_file: str = "../var/keys/keyring.json"
+
     rate_limit_per_minute: int = 100  # spec p.86
     approval_ttl_minutes: int = 15
     dispatch_grace_seconds: int = 20

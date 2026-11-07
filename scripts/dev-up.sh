@@ -9,7 +9,7 @@ set -a; [ -f .env ] && . ./.env || . ./.env.example; set +a
 export ASVAS_POLICY_DIR="$ROOT/policies"
 [ -f var/certs/executor.crt ] || ./scripts/dev-certs.sh >/dev/null
 # Relative TLS paths in .env are resolved from the repository root.
-for v in ASVAS_TLS_CA ASVAS_TLS_CERT ASVAS_TLS_KEY ASVAS_EXECUTOR_TLS_CA ASVAS_EXECUTOR_TLS_CERT ASVAS_EXECUTOR_TLS_KEY; do
+for v in ASVAS_KEYRING_FILE ASVAS_TLS_CA ASVAS_TLS_CERT ASVAS_TLS_KEY ASVAS_EXECUTOR_TLS_CA ASVAS_EXECUTOR_TLS_CERT ASVAS_EXECUTOR_TLS_KEY; do
   val="${!v:-}"; [ -n "$val" ] && [ "${val#/}" = "$val" ] && export "$v=$ROOT/$val"
 done
 

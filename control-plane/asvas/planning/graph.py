@@ -51,13 +51,16 @@ class PlanState(TypedDict, total=False):
 def build_context(conn, assessment: dict, round_no: int) -> PlanningContext:
     observations = []
     for r in rows(conn, """
-        SELECT j.tool_id, j.target, j.status, e.content FROM jobs j
+        SELECT j.tool_id, j.target, j.status, e.content, e.tenant_id, e.job_id, e.attempt, e.seq, e.enc_alg,
+               e.kek_id, e.dek_wrapped FROM jobs j
         LEFT JOIN evidence e ON e.job_id = j.id AND e.attempt = j.attempt
         WHERE j.assessment_id = :a ORDER BY j.created_at, e.seq LIMIT 50""", a=str(assessment["id"])):
         obs: dict[str, Any] = {"tool_id": r["tool_id"], "target": r["target"], "status": r["status"]}
         if r["content"] is not None:
             import json
-            ex = json.loads(bytes(r["content"]).decode())
+
+            from asvas.evidence import evidence_plaintext
+            ex = json.loads(evidence_plaintext(r).decode())
             resp = ex.get("response") or {}
             hdrs = {k.lower(): v for k, v in resp.get("headers", [])}
             obs.update({"http_status": resp.get("status"),

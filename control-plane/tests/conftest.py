@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -29,6 +30,7 @@ os.environ.update({
     "ASVAS_JWT_SECRET": "test-jwt-secret-not-secret-0123456789abcdef",
     "ASVAS_DISPATCH_GRACE_SECONDS": "2",
     "ASVAS_RATE_LIMIT_PER_MINUTE": "100000",
+    "ASVAS_KEYRING_FILE": os.path.join(tempfile.mkdtemp(prefix="asvas-keys-"), "keyring.json"),
 })
 
 

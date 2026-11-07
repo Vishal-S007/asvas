@@ -360,13 +360,21 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     @api.get("/reports/{rid}/download")
     def download_report(rid: uuid.UUID, p: Principal = Depends(rate_limited)):
         with tenant_tx(p.tenant_id) as conn:
-            r = row(conn, "SELECT status, content, sha256, assessment_id FROM reports WHERE id = :id", id=str(rid))
+            r = row(conn, "SELECT status, content, sha256, assessment_id, enc_alg, kek_id, dek_wrapped "
+                          "FROM reports WHERE id = :id", id=str(rid))
             if r is None:
                 raise HTTPException(404, "report not found")
             if r["status"] != "READY":
                 raise HTTPException(409, f"report is {r['status']}")
             audit.record(conn, p.tenant_id, p.actor, "report.downloaded", {"report_id": str(rid)}, r["assessment_id"])
-        return Response(bytes(r["content"]), media_type="application/pdf", headers={
+        from asvas import crypto
+        from asvas.canonical import sha256_hex
+        pdf = bytes(r["content"])
+        if r["enc_alg"]:
+            pdf = crypto.keyring().open(pdf, bytes(r["dek_wrapped"]), r["kek_id"], crypto.report_aad(p.tenant_id, rid))
+        if sha256_hex(pdf) != r["sha256"]:
+            raise HTTPException(500, "stored report failed its integrity check")
+        return Response(pdf, media_type="application/pdf", headers={
             "X-Content-SHA256": r["sha256"], "Content-Disposition": f'attachment; filename="asvas-report-{rid}.pdf"',
             "Cache-Control": "no-store"})
 

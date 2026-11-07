@@ -42,7 +42,7 @@ Status legend:
 | CP-08 | Role-based access (RACI: admin/CISO, red-team lead approver, operator, viewer) | 40-42 | Done | `viewer`, `operator`, `approver`, `admin`; enforced per endpoint, tested |
 | CP-09 | No single user can bypass HITL / alter global parameters alone | 41 | Done | Approver ≠ requester enforced; emergency stop is admin-only and audited |
 | CP-10 | mTLS between control & execution planes; TLS 1.3 everywhere; Vault CA | 58, 66, 68 | Partial (M3) | Executor gRPC requires mutual TLS 1.3 + SPIFFE-URI client identity (dev CA via `scripts/dev-certs.sh`); Redis/Postgres/API still plain TCP on localhost; no Vault/automated rotation |
-| CP-11 | Envelope/AES-256 encryption at rest; KMS | 7, 15, 24, 85 | Planned (M3) | Not implemented. Evidence stored plaintext in Postgres in M1 (documented limitation) |
+| CP-11 | Envelope/AES-256 encryption at rest; KMS | 7, 15, 24, 85 | Partial (M3) | Evidence and rendered reports sealed with AES-256-GCM envelope encryption (per-object DEK, KEK from key ring, record-bound AAD); rotation + DEK re-wrap (`asvas keys rotate|rewrap|status`); evidence content stays immutable. Open: real KMS/Vault instead of the local key file, DB volume encryption, rows written before M3 remain plaintext (reported by `keys status`) |
 
 ## 3. Planning & orchestration
 

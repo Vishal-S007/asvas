@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
-from asvas import audit
+from asvas import audit, crypto
 from asvas.canonical import canonical_json, sha256_hex
 from asvas.scoring import score
 
@@ -46,13 +46,17 @@ def store_exchanges(conn: Connection, tenant_id, assessment_id, job_id, attempt:
         body = canonical_json(_strip_floats(ex)).encode()
         if len(body) > MAX_EVIDENCE_BYTES:
             body = body[:MAX_EVIDENCE_BYTES]
-        digest = sha256_hex(body)
+        digest = sha256_hex(body)  # integrity of the plaintext; verified again after decryption
+        seq = int(ex["seq"])
+        sealed = crypto.keyring().seal(body, crypto.evidence_aad(tenant_id, job_id, attempt, seq))
         r = conn.execute(text(
-            "INSERT INTO evidence (tenant_id, assessment_id, job_id, attempt, seq, kind, content_type, content, sha256, size_bytes) "
-            "VALUES (:t,:a,:j,:att,:seq,'http_exchange','application/json',:c,:h,:n) "
+            "INSERT INTO evidence (tenant_id, assessment_id, job_id, attempt, seq, kind, content_type, content, sha256, "
+            "size_bytes, enc_alg, kek_id, dek_wrapped) "
+            "VALUES (:t,:a,:j,:att,:seq,'http_exchange','application/json',:c,:h,:n,:alg,:kid,:dek) "
             "ON CONFLICT (job_id, attempt, seq) DO NOTHING RETURNING id"),
-            {"t": str(tenant_id), "a": str(assessment_id), "j": str(job_id), "att": attempt, "seq": int(ex["seq"]),
-             "c": body, "h": digest, "n": len(body)}).scalar()
+            {"t": str(tenant_id), "a": str(assessment_id), "j": str(job_id), "att": attempt, "seq": seq,
+             "c": sealed.ciphertext, "h": digest, "n": len(body), "alg": sealed.alg, "kid": sealed.kek_id,
+             "dek": sealed.dek_wrapped}).scalar()
         if r is None:
             r = conn.execute(text("SELECT id FROM evidence WHERE job_id=:j AND attempt=:a AND seq=:s"),
                              {"j": str(job_id), "a": attempt, "s": int(ex["seq"])}).scalar()
@@ -70,14 +74,33 @@ def _strip_floats(o: Any) -> Any:
     return o
 
 
+def evidence_plaintext(m: dict[str, Any]) -> bytes:
+    """Decrypt one evidence row (needs tenant_id, job_id, attempt, seq, content, enc_alg, kek_id, dek_wrapped).
+    Rows written before encryption was introduced (enc_alg NULL) are returned as stored."""
+    content = bytes(m["content"])
+    if m.get("enc_alg") is None:
+        return content
+    return crypto.keyring().open(content, bytes(m["dek_wrapped"]), m["kek_id"],
+                                 crypto.evidence_aad(m["tenant_id"], m["job_id"], m["attempt"], m["seq"]))
+
+
 def load_evidence(conn: Connection, evidence_id) -> dict[str, Any] | None:
     r = conn.execute(text("SELECT * FROM evidence WHERE id = :id"), {"id": str(evidence_id)}).first()
     if not r:
         return None
     m = dict(r._mapping)
-    content = bytes(m.pop("content"))
-    m["integrity_ok"] = sha256_hex(content) == m["sha256"]
-    m["content"] = json.loads(content.decode())
+    try:
+        plain = evidence_plaintext(m)
+        m["integrity_ok"] = sha256_hex(plain) == m["sha256"]
+        m["content"] = json.loads(plain.decode())
+    except Exception as e:  # noqa: BLE001 - tampered ciphertext / missing key: report, never guess
+        m["integrity_ok"] = False
+        m["content"] = None
+        m["decrypt_error"] = type(e).__name__
+    m["encryption"] = {"alg": m.pop("enc_alg"), "kek_id": m.pop("kek_id")} if m.get("enc_alg") else None
+    m.pop("dek_wrapped", None)
+    m.pop("enc_alg", None)
+    m.pop("kek_id", None)
     return m
 
 

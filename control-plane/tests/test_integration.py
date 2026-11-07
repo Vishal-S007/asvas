@@ -91,7 +91,8 @@ def test_redirects_validated(client, make_assessment, deps, executor, target_ser
     aid, op = _start(client, make_assessment, ports=(weak,))
     wait_status(client, op, aid, {"COMPLETED"}, 60)
     with tenant_tx(tid_of()) as conn:
-        evs = [json.loads(bytes(r["content"])) for r in rows(conn, "SELECT content FROM evidence ORDER BY job_id, seq")]
+        from asvas.evidence import evidence_plaintext
+        evs = [json.loads(evidence_plaintext(r)) for r in rows(conn, "SELECT * FROM evidence ORDER BY job_id, seq")]
     blocked = [e for e in evs if (e.get("redirect") or {}).get("decision") == "blocked"]
     followed = [e for e in evs if (e.get("redirect") or {}).get("decision") == "followed"]
     assert len(blocked) == 1 and "198.51.100.7" in blocked[0]["redirect"]["location"]
