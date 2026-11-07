@@ -92,6 +92,12 @@ def controls(conn: Connection, tenant_id, policy_health: dict) -> list[dict[str,
                        f"execution logs, planner checkpoints and stream entries wiped after "
                        f"{s.transient_retention_days} days; {parts['n']} daily partitions (oldest {parts['oldest']})",
                        {"retention_days": s.transient_retention_days, "partitions": parts}))
+    from asvas.longterm import get_memory
+    mh = get_memory().health()
+    items.append(_item("long-term-memory", "DA-04", "Long-term memory isolation", "info",
+                       ("Qdrant " + ("reachable" if mh.get("reachable") else "UNREACHABLE") +
+                        "; anonymised catalogue-only summaries; mandatory tenant filter on every query")
+                       if mh.get("enabled") else "disabled (no long-term memory stored)", mh))
     items.append(_item("isolation", "PO-10", "Execution isolation", "attention",
                        "Firecracker microVMs are not available on this host; executors use the development process "
                        "sandbox (separate UID, no_new_privs, rlimits, nftables egress) — not equivalent isolation"))

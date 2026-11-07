@@ -171,3 +171,8 @@ as the source of truth.
 ### DA-09 CWE/CVSS catalog
 - Done: `asvas/rules.py`, CWE enforcement in `record_findings`, `/rules`; fixed COOKIE-FLAGS mapping (Secure-only was CWE-1275,
   now CWE-614). Tested: `test_rules.py` 16 passed; full suite passed (see counts below).
+
+### DA-04 Qdrant long-term memory
+- Done: `asvas/longterm.py`, `scripts/qdrant-dev.sh`, completion hook, planner context, Controls item.
+- Tested against live local Qdrant: `test_longterm.py` 7 passed (isolation across two tenants, API key required, foreign point
+  dropped, anonymised text has no IP/port/URL, recall feeds next planning context, guard, disabled mode).

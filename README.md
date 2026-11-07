@@ -40,6 +40,8 @@ cp .env.example .env            # dev placeholders; never commit .env (defaults 
 sudo ./scripts/dev-tls-services.sh   # PostgreSQL TLS 1.3 required + TLS-only Redis on :6380 (CP-10)
 # optional SSO + MFA (CP-07): Keycloak 26.4.2 unpacked into .tools/keycloak, then
 ./scripts/keycloak-dev.sh start && ./scripts/keycloak-dev.sh setup   # passwords: var/keycloak/dev-users.json
+# optional long-term memory (DA-04): qdrant v1.15.5 binary in .tools/qdrant, then
+./scripts/qdrant-dev.sh start
 # 4. control plane deps
 (cd control-plane && uv sync --frozen)
 # 5. start OPA, API, orchestrator, executor and the local test target (logs in var/logs/)

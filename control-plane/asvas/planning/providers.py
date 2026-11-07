@@ -51,6 +51,7 @@ class PlanningContext:
     executed: list[dict[str, Any]] = field(default_factory=list)       # tool/target/params already run
     remaining_tokens: int = 0
     blocked_paths: list[str] = field(default_factory=list)  # PL-05: paths blocked after repeated failures
+    prior_assessments: list[dict[str, Any]] = field(default_factory=list)  # DA-04, same tenant, anonymised
     agent: str | None = None    # PL-10: the sub-agent this context is for (tools are already restricted)
     agent_brief: str | None = None
 
@@ -167,6 +168,7 @@ class AnthropicProvider:
             "policy": {k: ctx.policy[k] for k in ("allowed_tools", "max_jobs")},
             "tools": [{k: t[k] for k in ("tool_id", "description", "params_schema")} for t in ctx.tools],
             "already_executed": ctx.executed, "blocked_paths": ctx.blocked_paths,
+            "prior_assessments_same_tenant": ctx.prior_assessments,
             "untrusted_observations": ctx.observations,
         }
         user = redact(json.dumps(payload, ensure_ascii=True))

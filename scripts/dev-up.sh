@@ -12,7 +12,7 @@ if [ "${ASVAS_REDIS_URL:-}" != "${ASVAS_REDIS_URL#rediss}" ] && ! (exec 3<>/dev/
   if [ "$(id -u)" = "0" ]; then ./scripts/dev-tls-services.sh; else echo "TLS Redis not running: run sudo scripts/dev-tls-services.sh"; exit 1; fi
 fi
 # Relative TLS paths in .env are resolved from the repository root.
-for v in ASVAS_OIDC_CA_FILE ASVAS_KEYRING_FILE ASVAS_REDIS_CA_FILE ASVAS_REDIS_CA ASVAS_OPA_CA_FILE ASVAS_API_TLS_CERT ASVAS_API_TLS_KEY ASVAS_TLS_CA ASVAS_TLS_CERT ASVAS_TLS_KEY ASVAS_EXECUTOR_TLS_CA ASVAS_EXECUTOR_TLS_CERT ASVAS_EXECUTOR_TLS_KEY; do
+for v in ASVAS_QDRANT_API_KEY_FILE ASVAS_QDRANT_CA_FILE ASVAS_OIDC_CA_FILE ASVAS_KEYRING_FILE ASVAS_REDIS_CA_FILE ASVAS_REDIS_CA ASVAS_OPA_CA_FILE ASVAS_API_TLS_CERT ASVAS_API_TLS_KEY ASVAS_TLS_CA ASVAS_TLS_CERT ASVAS_TLS_KEY ASVAS_EXECUTOR_TLS_CA ASVAS_EXECUTOR_TLS_CERT ASVAS_EXECUTOR_TLS_KEY; do
   val="${!v:-}"; [ -n "$val" ] && [ "${val#/}" = "$val" ] && export "$v=$ROOT/$val"
 done
 
@@ -30,6 +30,9 @@ if [ -x "$ROOT/.tools/neo4j/bin/neo4j" ] && [ -n "${ASVAS_NEO4J_URI:-}" ]; then
 fi
 if [ -n "${ASVAS_OIDC_ISSUER:-}" ] && [ -x "$ROOT/.tools/keycloak/bin/kc.sh" ] && ! curl -sf --cacert var/certs/ca.crt "$ASVAS_OIDC_ISSUER" >/dev/null; then
   ./scripts/keycloak-dev.sh start && ./scripts/keycloak-dev.sh setup >/dev/null
+fi
+if [ -n "${ASVAS_QDRANT_URL:-}" ] && [ -x "$ROOT/.tools/qdrant" ] && ! (exec 3<>/dev/tcp/127.0.0.1/6333) 2>/dev/null; then
+  ./scripts/qdrant-dev.sh start
 fi
 if [ "${ASVAS_OPA_URL:-}" != "${ASVAS_OPA_URL#https}" ]; then
   start opa "$OPA" run --server --addr 127.0.0.1:8181 --log-level error --tls-cert-file "$ROOT/var/certs/services.crt" \

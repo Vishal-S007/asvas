@@ -75,7 +75,13 @@ def build_context(conn, assessment: dict, round_no: int) -> PlanningContext:
                 for r in rows(conn, "SELECT tool_id, target, params FROM jobs WHERE assessment_id = :a",
                               a=str(assessment["id"]))]
     policy = assessment["testing_policy"]
+    from asvas.longterm import get_memory
+    try:
+        prior = get_memory().recall(assessment["tenant_id"], "tools " + " ".join(policy["allowed_tools"]))
+    except Exception:  # noqa: BLE001 - memory is advisory; planning never depends on it
+        prior = []
     return PlanningContext(
+        prior_assessments=prior,
         assessment_id=str(assessment["id"]), round=round_no, scope=assessment["scope"], policy=policy,
         tools=[t for t in catalog() if t["tool_id"] in policy["allowed_tools"]],
         observations=observations, executed=executed,

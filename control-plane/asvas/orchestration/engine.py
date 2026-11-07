@@ -515,6 +515,7 @@ def advance(deps: Deps, tenant_id, assessment_id, from_planning: bool = False) -
                 transition_assessment(conn, tenant_id, assessment_id, "COMPLETED", "system:orchestrator",
                                       extra=_summary(conn, assessment_id))
                 _clear_short_term(deps, assessment_id)
+                _remember(conn, tenant_id, assessment_id)
                 return "COMPLETED"
             if target != a["status"]:
                 transition_assessment(conn, tenant_id, assessment_id, target, "system:orchestrator")
@@ -530,6 +531,21 @@ def advance(deps: Deps, tenant_id, assessment_id, from_planning: bool = False) -
 def _counts(conn, assessment_id) -> dict[str, int]:
     return {r["status"]: r["n"] for r in rows(conn, "SELECT status, count(*) n FROM jobs WHERE assessment_id = :a "
                                                     "GROUP BY status", a=str(assessment_id))}
+
+
+def _remember(conn, tenant_id, assessment_id) -> None:
+    """DA-04: store an anonymised summary in long-term memory (best effort; outcome audited)."""
+    from asvas.longterm import get_memory, summarise
+    mem = get_memory()
+    if mem.name == "disabled":
+        return
+    try:
+        summ = summarise(conn, assessment_id)
+        mem.remember(tenant_id, assessment_id, summ)
+        audit.record(conn, tenant_id, "system:memory", "memory.stored",
+                     {"store": mem.name, "anonymised_text": summ["text"]}, assessment_id)
+    except Exception as e:  # noqa: BLE001
+        audit.record(conn, tenant_id, "system:memory", "memory.store_failed", {"error": type(e).__name__}, assessment_id)
 
 
 def _summary(conn, assessment_id) -> dict:
