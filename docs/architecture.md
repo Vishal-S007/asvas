@@ -104,3 +104,8 @@ dashboard/       React + Vite + TypeScript
 scripts/         dev start/stop, e2e
 docs/            requirements, architecture, threat model, plan, progress, demo
 ```
+
+## Planning sub-agents (PL-10)
+Each planning round runs `agent_discovery` (RECON tools) then `agent_config_verifier` (CONFIG_VERIFIER tools) as LangGraph
+nodes, merges their proposals and validates them deterministically. An agent only sees, and may only use, the tools of its
+role. The model provider is shared; the agent's name and brief are passed in the request.

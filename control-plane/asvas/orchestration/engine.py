@@ -153,7 +153,7 @@ def _materialize(deps: Deps):
                        f"{s['tool_id']} → {acc['target']['scheme']}://{acc['target']['host']}:{acc['target']['port']}",
                        "denied" if j["status"] == "DENIED" else "job",
                        (j["policy_decision"] or {}).get("deny_reasons", []),
-                       {"job_id": str(job_id), "rationale": s["rationale"]})
+                       {"job_id": str(job_id), "rationale": s["rationale"], "agent": s.get("agent")})
         conn.execute(text(
             "UPDATE assessments SET planning_rounds = planning_rounds + 1, tokens_used = tokens_used + :tok, "
             "cost_usd_micros = cost_usd_micros + :cost, "

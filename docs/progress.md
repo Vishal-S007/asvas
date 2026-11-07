@@ -128,3 +128,8 @@ as the source of truth.
   per-step cost ceiling and per-assessment cost budget (migration 0008); live provider refuses without configured prices.
 - Tested: `test_planning_controls.py` 11 passed. Full Python suite 142 passed.
 - Not claimed: no real model was called; cost logic is tested with mocked responses only.
+
+### M3 — PL-10 specialised agents (2026-11-07)
+- Done: `planning/agents.py`; graph nodes per agent; sub-schema enforcement in `validate_proposal`; agent-namespaced step ids.
+- Tested: `test_agents.py` 3 passed (agents see only their tools, cross-role proposals rejected with PL-10 reason, agents with no
+  permitted tools are not called). Full Python suite 145 passed.

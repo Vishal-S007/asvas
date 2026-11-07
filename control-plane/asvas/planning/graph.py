@@ -1,9 +1,9 @@
 """LangGraph planning graph (spec pp. 9-10, 64-66, 71-72).
 
-    propose ──(provider error / budget)──► END (error recorded; assessment fails honestly)
-       │
+    agent_discovery ──► agent_config_verifier ──► merge      (PL-10: each sub-agent sees only its tool sub-schema)
+       │ (provider error / budget) ──► END (error recorded; assessment fails honestly)
        ▼
-    validate ──(nothing valid, retries left)──► propose      (bounded: max 1 re-proposal per round)
+    validate ──(nothing valid, retries left)──► agent_discovery   (bounded: max 1 re-proposal per round)
        │
        ▼
     materialize (OPA decision per step → job DENIED | AWAITING_APPROVAL | QUEUED) ──► END
@@ -24,6 +24,7 @@ from sqlalchemy import Engine
 
 from asvas import audit
 from asvas.db import row, rows, tenant_tx
+from asvas.planning.agents import AGENTS, AgentSpec, tools_for
 from asvas.planning.providers import ModelProvider, PlanningContext, PlanProposal, ProviderError
 from asvas.planning.validate import validate_proposal
 from asvas.redaction import untrusted_snippet
@@ -43,6 +44,7 @@ class PlanState(TypedDict, total=False):
     provider_name: str
     is_live_ai: bool
     proposal: dict[str, Any] | None
+    proposals: dict[str, Any]
     accepted: list[dict[str, Any]]
     rejected: list[dict[str, Any]]
     error: str | None
@@ -86,32 +88,55 @@ def build_planner(engine: Engine | None, provider: ModelProvider,
                   blocked_fn: Callable[[str], set[str]] = lambda _aid: set()):
     tx = functools.partial(tenant_tx, engine=engine)
 
-    def propose(state: PlanState) -> PlanState:
-        with tx(state["tenant_id"]) as conn:
-            a = row(conn, "SELECT * FROM assessments WHERE id = :id", id=state["assessment_id"])
-            assert a is not None
-            policy = a["testing_policy"]
-            used = a["tokens_used"] + state.get("tokens", 0)
-            if provider.is_live_ai and used >= policy["max_tokens"]:
-                return {"error": f"token budget exhausted ({used}/{policy['max_tokens']})"}
-            spent = a.get("cost_usd_micros", 0) + state.get("cost_micros", 0)
-            cap = policy.get("max_cost_usd_cents", 200) * 10_000
-            if provider.is_live_ai and spent >= cap:
-                return {"error": f"cost budget exhausted (${spent / 1e6:.4f} of ${cap / 1e6:.2f})"}
-            started = a["started_at"]
-            if started and dt.datetime.now(dt.UTC) - started > dt.timedelta(minutes=policy["max_wall_clock_minutes"]):
-                return {"error": "wall-clock budget exhausted"}
-            ctx = build_context(conn, a, state["round"])
+    def budget_error(a: dict, state: PlanState) -> str | None:
+        policy = a["testing_policy"]
+        used = a["tokens_used"] + state.get("tokens", 0)
+        if provider.is_live_ai and used >= policy["max_tokens"]:
+            return f"token budget exhausted ({used}/{policy['max_tokens']})"
+        spent = a.get("cost_usd_micros", 0) + state.get("cost_micros", 0)
+        cap = policy.get("max_cost_usd_cents", 200) * 10_000
+        if provider.is_live_ai and spent >= cap:
+            return f"cost budget exhausted (${spent / 1e6:.4f} of ${cap / 1e6:.2f})"
+        started = a["started_at"]
+        if started and dt.datetime.now(dt.UTC) - started > dt.timedelta(minutes=policy["max_wall_clock_minutes"]):
+            return "wall-clock budget exhausted"
+        return None
+
+    def make_agent(agent: AgentSpec):
+        def run_agent(state: PlanState) -> PlanState:
+            if state.get("error"):
+                return {}
+            with tx(state["tenant_id"]) as conn:
+                a = row(conn, "SELECT * FROM assessments WHERE id = :id", id=state["assessment_id"])
+                assert a is not None
+                if err := budget_error(a, state):
+                    return {"error": err}
+                ctx = build_context(conn, a, state["round"])
             ctx.blocked_paths = sorted(blocked_fn(state["assessment_id"]))
-        try:
-            res = provider.propose(ctx)
-        except ProviderError as e:
-            return {"error": f"planning provider '{provider.name}' failed: {e}",
-                    "provider_name": provider.name, "is_live_ai": provider.is_live_ai}
-        return {"proposal": res.proposal.model_dump(), "tokens": state.get("tokens", 0) + res.tokens_used,
-                "cost_micros": state.get("cost_micros", 0) + round(res.cost_usd * 1_000_000),
-                "provider_name": res.provider_name, "is_live_ai": res.is_live_ai, "error": None,
-                "done": res.proposal.done}
+            ctx.tools = tools_for(agent, ctx.tools)
+            ctx.agent, ctx.agent_brief = agent.name, agent.brief
+            prev = dict(state.get("proposals") or {})
+            if not ctx.tools:  # this agent has nothing it may use under the testing policy
+                prev[agent.name] = {"steps": [], "done": True, "summary": "no tools in this agent's sub-schema"}
+                return {"proposals": prev}
+            try:
+                res = provider.propose(ctx)
+            except ProviderError as e:
+                return {"error": f"planning provider '{provider.name}' failed ({agent.name} agent): {e}",
+                        "provider_name": provider.name, "is_live_ai": provider.is_live_ai}
+            prev[agent.name] = _tag(res.proposal.model_dump(), agent)
+            return {"proposals": prev, "tokens": state.get("tokens", 0) + res.tokens_used,
+                    "cost_micros": state.get("cost_micros", 0) + round(res.cost_usd * 1_000_000),
+                    "provider_name": res.provider_name, "is_live_ai": res.is_live_ai}
+        return run_agent
+
+    def merge(state: PlanState) -> PlanState:
+        props = state.get("proposals") or {}
+        steps = [s for p in props.values() for s in p["steps"]]
+        done = all(p.get("done") for p in props.values()) if props else True
+        return {"proposal": {"steps": steps, "done": done,
+                             "summary": " | ".join(f"{k}: {v.get('summary', '')}" for k, v in props.items())},
+                "done": done, "error": None, "proposals": {}}
 
     def validate(state: PlanState) -> PlanState:
         with tx(state["tenant_id"]) as conn:
@@ -120,14 +145,18 @@ def build_planner(engine: Engine | None, provider: ModelProvider,
             fps = {r["fingerprint"] for r in rows(conn, "SELECT fingerprint FROM jobs WHERE assessment_id = :a",
                                                   a=state["assessment_id"])}
             count = len(fps)
-        proposal = PlanProposal.model_validate(state["proposal"])
+        proposal = PlanProposal.model_validate({**state["proposal"], "steps": [
+            {k: v for k, v in st.items() if k != "agent"} for st in state["proposal"]["steps"]]})
+        agent_of = {st["step_id"]: st.get("agent") for st in state["proposal"]["steps"]}
         outcome = validate_proposal(proposal, Scope.model_validate(a["scope"]), a["testing_policy"], fps, count,
-                                    state["round"], resolve_fn, blocked_fn(state["assessment_id"]))
+                                    state["round"], resolve_fn, blocked_fn(state["assessment_id"]), agent_of)
         return {
-            "accepted": [{"step": v.step.model_dump(), "target": v.target, "params": v.params,
+            "accepted": [{"step": {**v.step.model_dump(), "agent": agent_of.get(v.step.step_id)},
+                          "target": v.target, "params": v.params,
                           "resolved_ips": v.resolved_ips, "fingerprint": v.fingerprint, "depth": v.depth}
                          for v in outcome.accepted],
-            "rejected": state.get("rejected", []) + [{"step": s.model_dump(), "reasons": r} for s, r in outcome.rejected],
+            "rejected": state.get("rejected", []) + [{"step": {**s.model_dump(), "agent": agent_of.get(s.step_id)},
+                                                       "reasons": r} for s, r in outcome.rejected],
         }
 
     def route_after_validate(state: PlanState) -> str:
@@ -147,23 +176,42 @@ def build_planner(engine: Engine | None, provider: ModelProvider,
         return {}
 
     g = StateGraph(PlanState)
-    g.add_node("propose", propose)
+    names = [f"agent_{a.name}" for a in AGENTS]
+    for a, n in zip(AGENTS, names, strict=True):
+        g.add_node(n, make_agent(a))
+    g.add_node("merge", merge)
     g.add_node("validate", validate)
     g.add_node("repropose", bump)
     g.add_node("materialize", materialize)
-    g.add_edge(START, "propose")
-    g.add_conditional_edges("propose", lambda s: END if s.get("error") else "validate", ["validate", END])
+    g.add_edge(START, names[0])
+    for cur, nxt in zip(names, [*names[1:], "merge"], strict=True):
+        g.add_conditional_edges(cur, lambda s, nxt=nxt: END if s.get("error") else nxt, [nxt, END])
+    g.add_edge("merge", "validate")
     g.add_conditional_edges("validate", route_after_validate, ["repropose", "materialize"])
-    g.add_edge("repropose", "propose")
+    g.add_edge("repropose", names[0])
     g.add_edge("materialize", END)
     return g.compile(checkpointer=checkpointer)
+
+
+def _tag(proposal: dict, agent: AgentSpec) -> dict:
+    """Namespace step ids per agent (ids stay unique across agents) and record which agent proposed each step.
+    The agent label is set here, never taken from model output."""
+    def nid(x: str) -> str:
+        return f"{agent.prefix}-{x[:35]}"
+    for st in proposal["steps"]:
+        st["step_id"], st["depends_on"] = nid(st["step_id"]), [nid(d) for d in st["depends_on"]]
+        st["agent"] = agent.name
+    return proposal
 
 
 def record_planning_audit(conn, tenant_id, assessment_id, state: PlanState) -> None:
     audit.record(conn, tenant_id, "system:planner", "planning.round", {
         "round": state["round"], "provider": state.get("provider_name"), "is_live_ai": state.get("is_live_ai"),
         "accepted": len(state.get("accepted", [])), "rejected": len(state.get("rejected", [])),
-        "rejections": [{"tool_id": r["step"]["tool_id"], "target": r["step"]["target"], "reasons": r["reasons"]}
+        "agents": sorted({x["step"].get("agent") for x in state.get("accepted", []) + state.get("rejected", [])
+                          if x["step"].get("agent")}),
+        "rejections": [{"tool_id": r["step"]["tool_id"], "agent": r["step"].get("agent"), "target": r["step"]["target"],
+                        "reasons": r["reasons"]}
                        for r in state.get("rejected", [])],
         "tokens": state.get("tokens", 0), "cost_usd": state.get("cost_micros", 0) / 1e6, "done": state.get("done"),
     }, assessment_id)

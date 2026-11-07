@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from asvas.canonical import canonical_json, sha256_hex
+from asvas.planning.agents import tool_allowed_for
 from asvas.planning.providers import PlanProposal, PlanStep
 from asvas.scope import Scope, check_target, resolve
 from asvas.tools import REGISTRY, ToolParamError, validate_params
@@ -87,7 +88,8 @@ def path_id(tool_id: str, target: dict) -> str:
 def validate_proposal(proposal: PlanProposal, scope: Scope, policy: dict, existing_fingerprints: set[str],
                       existing_job_count: int, round_no: int,
                       resolve_fn: Callable[[str], list[str]] = resolve,
-                      blocked_paths: set[str] | frozenset[str] = frozenset()) -> ValidationOutcome:
+                      blocked_paths: set[str] | frozenset[str] = frozenset(),
+                      agent_of: dict[str, str | None] | None = None) -> ValidationOutcome:
     out = ValidationOutcome()
     ids = [s.step_id for s in proposal.steps]
     dup_ids = {i for i in ids if ids.count(i) > 1}
@@ -123,6 +125,9 @@ def validate_proposal(proposal: PlanProposal, scope: Scope, policy: dict, existi
         else:
             if s.tool_id not in policy["allowed_tools"]:
                 reasons.append(f"tool {s.tool_id} is not allowed by the testing policy")
+            if agent_of is not None and not tool_allowed_for(agent_of.get(s.step_id), s.tool_id):
+                reasons.append(f"tool {s.tool_id} is outside the tool sub-schema of agent "
+                               f"{agent_of.get(s.step_id)!r} (PL-10)")
             if s.target.scheme.lower() not in spec.schemes:
                 reasons.append(f"tool {s.tool_id} does not support scheme {s.target.scheme}")
             try:
