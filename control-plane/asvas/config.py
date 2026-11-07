@@ -19,8 +19,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://asvas_app:asvas_app_dev@localhost:5432/asvas"
     migration_database_url: str = "postgresql+psycopg://asvas_owner:asvas_owner_dev@localhost:5432/asvas"
     redis_url: str = "redis://localhost:6379/0"
+    redis_ca_file: str = ""  # CA bundle for rediss:// (dev CA from scripts/dev-certs.sh)
     opa_url: str = "http://127.0.0.1:8181"
     opa_timeout_seconds: float = 2.0
+    opa_ca_file: str = ""  # CA bundle when ASVAS_OPA_URL is https:// (dev CA)
+    # API gateway TLS (uvicorn). Required outside development.
+    api_tls_cert: str = ""
+    api_tls_key: str = ""
 
     jwt_secret: SecretStr = SecretStr(DEV_PLACEHOLDER)
     jwt_ttl_minutes: int = 60

@@ -1,19 +1,23 @@
 """Local demo walkthrough against the running dev stack (see docs/demo.md). Uses only the bundled test target."""
 
 import datetime as dt
+import os
+import ssl
 import json
 import sys
 import time
 import urllib.request
 
-API = "http://127.0.0.1:8000/api/v1"
+API = os.environ.get("ASVAS_API_URL", "http://127.0.0.1:8000") + "/api/v1"
+_CA = os.environ.get("ASVAS_CA_FILE")
+_CTX = ssl.create_default_context(cafile=_CA) if _CA else None
 
 
 def call(method, path, token=None, body=None):
     req = urllib.request.Request(API + path, method=method, data=json.dumps(body).encode() if body is not None else None,
                                  headers={"Content-Type": "application/json", **({"Authorization": f"Bearer {token}"} if token else {})})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with urllib.request.urlopen(req, timeout=30, context=_CTX) as r:
             raw = r.read()
             return r.status, json.loads(raw) if raw and r.headers.get_content_type().endswith("json") else raw.decode()
     except urllib.error.HTTPError as e:

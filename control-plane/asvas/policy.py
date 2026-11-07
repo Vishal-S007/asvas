@@ -45,7 +45,8 @@ class OpaClient:
     def __init__(self, url: str | None = None, transport: httpx.BaseTransport | None = None):
         s = get_settings()
         self.url = (url or s.opa_url).rstrip("/")
-        self._client = httpx.Client(timeout=s.opa_timeout_seconds, transport=transport, trust_env=False)
+        verify: bool | str = s.opa_ca_file or True
+        self._client = httpx.Client(timeout=s.opa_timeout_seconds, transport=transport, trust_env=False, verify=verify)
 
     def evaluate(self, policy_input: dict) -> PolicyDecision:
         try:

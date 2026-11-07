@@ -18,13 +18,30 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+CA = ROOT / "var" / "certs" / "ca.crt"
+
+
+def _tls_redis_up() -> bool:
+    try:
+        socket.create_connection(("127.0.0.1", 6380), 0.3).close()
+        return CA.exists()
+    except OSError:
+        return False
+
+
+# When the local dev stack runs with TLS (scripts/dev-tls-services.sh), tests use verified TLS too;
+# otherwise (e.g. CI service containers) plain local connections.
+_PG_TLS = f"?sslmode=verify-full&sslrootcert={CA}" if CA.exists() and os.environ.get("ASVAS_TEST_PLAIN_DB") != "1" else ""
+_REDIS_TLS = _tls_redis_up()
 os.environ.update({
     "ASVAS_ENV": "test",
     "ASVAS_DATABASE_URL": os.environ.get("TEST_DATABASE_URL",
-                                         "postgresql+psycopg://asvas_app:asvas_app_dev@localhost:5432/asvas_test"),
-    "ASVAS_MIGRATION_DATABASE_URL": os.environ.get("TEST_MIGRATION_DATABASE_URL",
-                                                   "postgresql+psycopg://asvas_owner:asvas_owner_dev@localhost:5432/asvas_test"),
-    "ASVAS_REDIS_URL": os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/15"),
+                                         "postgresql+psycopg://asvas_app:asvas_app_dev@localhost:5432/asvas_test" + _PG_TLS),
+    "ASVAS_MIGRATION_DATABASE_URL": os.environ.get(
+        "TEST_MIGRATION_DATABASE_URL", "postgresql+psycopg://asvas_owner:asvas_owner_dev@localhost:5432/asvas_test" + _PG_TLS),
+    "ASVAS_REDIS_URL": os.environ.get("TEST_REDIS_URL",
+                                      "rediss://localhost:6380/15" if _REDIS_TLS else "redis://localhost:6379/15"),
+    "ASVAS_REDIS_CA_FILE": str(CA) if _REDIS_TLS else "",
     "ASVAS_ALLOW_LOOPBACK_TARGETS": "true",
     "ASVAS_SIGNING_KEY": "test-signing-key-not-secret",
     "ASVAS_JWT_SECRET": "test-jwt-secret-not-secret-0123456789abcdef",
@@ -191,7 +208,7 @@ def executor(executor_bin, clean, target_server, pki, monkeypatch, tmp_path):
     monkeypatch.setattr(s, "executor_tls_ca", str(pki / "ca.crt"))
     monkeypatch.setattr(s, "executor_tls_cert", str(pki / "control-plane.crt"))
     monkeypatch.setattr(s, "executor_tls_key", str(pki / "control-plane.key"))
-    env = {"ASVAS_TLS_CA": str(pki / "ca.crt"), "ASVAS_TLS_CERT": str(pki / "executor.crt"),
+    env = {"ASVAS_REDIS_CA": os.environ.get("ASVAS_REDIS_CA_FILE", ""), "ASVAS_TLS_CA": str(pki / "ca.crt"), "ASVAS_TLS_CERT": str(pki / "executor.crt"),
            "ASVAS_TLS_KEY": str(pki / "executor.key"), "ASVAS_GRPC_ADDR": "127.0.0.1:0","PATH": os.environ.get("PATH", ""), "ASVAS_ENV": "development",
            "ASVAS_SIGNING_KEY": os.environ["ASVAS_SIGNING_KEY"], "ASVAS_REDIS_URL": os.environ["ASVAS_REDIS_URL"],
            "ASVAS_POLICY_DIR": str(ROOT / "policies"), "ASVAS_ALLOW_LOOPBACK_TARGETS": "true",

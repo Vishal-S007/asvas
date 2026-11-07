@@ -133,7 +133,16 @@ def main(argv: list[str] | None = None) -> int:
         import uvicorn
 
         from asvas.api.app import create_app
-        uvicorn.run(create_app(), host=a.host, port=a.port, log_level="info")
+        s = get_settings()
+        tls = {}
+        if s.api_tls_cert and s.api_tls_key:
+            import ssl
+            tls = {"ssl_certfile": s.api_tls_cert, "ssl_keyfile": s.api_tls_key,
+                   "ssl_version": ssl.PROTOCOL_TLS_SERVER, "ssl_ciphers": "ECDHE+AESGCM:ECDHE+CHACHA20"}
+        elif s.env == "production":
+            print("refusing to serve the API without TLS outside development", file=sys.stderr)
+            return 2
+        uvicorn.run(create_app(), host=a.host, port=a.port, log_level="info", **tls)
     elif a.cmd == "orchestrator":
         run_orchestrator()
     elif a.cmd == "report-worker":

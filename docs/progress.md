@@ -90,3 +90,11 @@ Branch `feature/m1-vertical-slice` (local only; no remote configured — see "Un
 M2 step 1: implement the Neo4j `GraphStore` adapter behind the existing asset-correlation calls
 (`asvas/evidence.py::correlate_assets`), with a docker-compose service definition and tests, keeping Postgres
 as the source of truth.
+
+### M3 — CP-10 local service TLS (2026-11-07)
+- Done: dev CA now carries critical CA/keyUsage extensions (Python 3.13 strict X.509 rejected the old one).
+- PostgreSQL TLS 1.3 required; Redis TLS-only :6380; OPA HTTPS (TLS 1.3 min); API HTTPS. `.env.example` defaults to TLS.
+- Tested: `tests/test_service_tls.py` 6 passed (pg_stat_ssl TLSv1.3, plaintext rejected, Redis TLSv1.3, wrong CA rejected,
+  production refuses `redis://`, API TLS handshake). Full suites under TLS: Python 110 passed, Go all packages ok, OPA 21/21.
+  Demo over HTTPS: 6 findings, audit chain ok.
+- Incomplete: Neo4j bolt TLS; API not pinned to TLS 1.3; no Vault-managed CA or rotation.

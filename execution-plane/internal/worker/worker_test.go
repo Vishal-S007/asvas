@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -63,11 +64,7 @@ type fixture struct {
 
 func setup(t *testing.T, resolver netguard.Resolver) *fixture {
 	t.Helper()
-	opt, _ := redis.ParseURL(envOr("TEST_REDIS_URL_GO", "redis://localhost:6379/14"))
-	rdb := redis.NewClient(opt)
-	if err := rdb.Ping(context.Background()).Err(); err != nil {
-		t.Skip("redis not available:", err)
-	}
+	rdb := testRedis(t)
 	rdb.FlushDB(context.Background())
 	pol, err := policy.Load(context.Background(), "../../../policies")
 	if err != nil {
@@ -102,6 +99,36 @@ func setup(t *testing.T, resolver netguard.Resolver) *fixture {
 			sb.Egress().Teardown()
 		}
 	}}
+}
+
+// testRedis connects to the plain dev/CI Redis, or to the TLS-only dev Redis (scripts/dev-tls-services.sh)
+// verified against the dev CA. Skips when neither is reachable.
+func testRedis(t *testing.T) *redis.Client {
+	t.Helper()
+	urls := []string{envOr("TEST_REDIS_URL_GO", "redis://localhost:6379/14"), "rediss://localhost:6380/14"}
+	for _, u := range urls {
+		opt, err := redis.ParseURL(u)
+		if err != nil {
+			continue
+		}
+		if opt.TLSConfig != nil {
+			pem, err := os.ReadFile("../../../var/certs/ca.crt")
+			if err != nil {
+				continue
+			}
+			pool := x509.NewCertPool()
+			pool.AppendCertsFromPEM(pem)
+			opt.TLSConfig.RootCAs = pool
+		}
+		opt.MaxRetries = -1 // probe quickly; fall through to the next candidate
+		rdb := redis.NewClient(opt)
+		if rdb.Ping(context.Background()).Err() == nil {
+			return rdb
+		}
+		rdb.Close()
+	}
+	t.Skip("redis not available (plain or TLS)")
+	return nil
 }
 
 func envOr(k, d string) string {

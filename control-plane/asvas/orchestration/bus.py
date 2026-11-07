@@ -34,7 +34,15 @@ def halt_key_assessment(assessment_id: str) -> str:
 
 @functools.lru_cache
 def get_redis(url: str | None = None) -> redis.Redis:
-    return redis.Redis.from_url(url or get_settings().redis_url, decode_responses=True)
+    s = get_settings()
+    u = url or s.redis_url
+    if u.startswith("rediss://"):
+        # Verified TLS: CA from config (dev CA) or system roots; hostname checked; TLS 1.2+ (server enforces 1.3).
+        return redis.Redis.from_url(u, decode_responses=True, ssl_cert_reqs="required",
+                                    ssl_ca_certs=s.redis_ca_file or None, ssl_check_hostname=True)
+    if s.env == "production":
+        raise RuntimeError("ASVAS_REDIS_URL must use rediss:// (TLS) outside development")
+    return redis.Redis.from_url(u, decode_responses=True)
 
 
 def ensure_groups(r: redis.Redis) -> None:

@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"net"
@@ -99,6 +101,22 @@ func run(log *slog.Logger) error {
 	opt, err := redis.ParseURL(env("ASVAS_REDIS_URL", "redis://localhost:6379/0"))
 	if err != nil {
 		return err
+	}
+	if opt.TLSConfig != nil { // rediss://: verify against the configured CA (or system roots)
+		opt.TLSConfig.MinVersion = tls.VersionTLS12
+		if caFile := env("ASVAS_REDIS_CA", ""); caFile != "" {
+			pem, err := os.ReadFile(caFile)
+			if err != nil {
+				return fmt.Errorf("redis CA: %w", err)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(pem) {
+				return fmt.Errorf("redis CA: no certificates in %s", caFile)
+			}
+			opt.TLSConfig.RootCAs = pool
+		}
+	} else if envName == "production" {
+		return fmt.Errorf("ASVAS_REDIS_URL must use rediss:// (TLS) outside development")
 	}
 	rdb := redis.NewClient(opt)
 	host, _ := os.Hostname()
