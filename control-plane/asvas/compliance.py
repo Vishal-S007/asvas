@@ -95,10 +95,15 @@ def controls(conn: Connection, tenant_id, policy_health: dict) -> list[dict[str,
                        + f"; {len(digest)} policy file(s) on disk", {"files_sha256": digest}))
     parts = row(conn, "SELECT count(*) AS n, min(c.relname) AS oldest FROM pg_inherits i JOIN pg_class c ON "
                       "c.oid = i.inhrelid WHERE i.inhparent = 'execution_log'::regclass")
-    items.append(_item("retention", "DA-14", "Transient log retention", "info",
+    adef = row(conn, "SELECT count(*) AS n FROM audit_events WHERE tableoid = 'audit_events_default'::regclass")["n"]
+    aparts = row(conn, "SELECT count(*) AS n FROM pg_inherits WHERE inhparent = 'audit_events'::regclass")["n"]
+    items.append(_item("retention", "DA-14", "Transient log retention", "info" if adef == 0 else "attention",
                        f"execution logs, planner checkpoints and stream entries wiped after "
-                       f"{s.transient_retention_days} days; {parts['n']} daily partitions (oldest {parts['oldest']})",
-                       {"retention_days": s.transient_retention_days, "partitions": parts}))
+                       f"{s.transient_retention_days} days; {parts['n']} daily partitions (oldest {parts['oldest']}); "
+                       f"audit history kept in {aparts} monthly partitions"
+                       + (f"; {adef} audit rows in the DEFAULT partition (create missing months)" if adef else ""),
+                       {"retention_days": s.transient_retention_days, "partitions": parts,
+                        "audit_partitions": aparts, "audit_default_rows": adef}))
     from asvas.longterm import get_memory
     mh = get_memory().health()
     items.append(_item("long-term-memory", "DA-04", "Long-term memory isolation", "info",

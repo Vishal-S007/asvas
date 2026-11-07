@@ -199,7 +199,7 @@ def _run_planning_round(deps: Deps, tenant_id, assessment_id) -> None:
         _fail(deps, tenant_id, assessment_id, f"planning provider unavailable: {e}")
         return
     graph = build_planner(deps.engine, provider, _materialize(deps), deps.resolve_fn, deps.checkpointer,
-                          blocked_fn=lambda aid: memory.blocked_paths(deps.r, aid))
+                          blocked_fn=lambda aid: _blocked_paths(deps, tenant_id, aid))
     cfg = {"configurable": {"thread_id": f"{assessment_id}:{round_no}"}, "recursion_limit": 12}
     try:
         final = graph.invoke({"tenant_id": str(tenant_id), "assessment_id": str(assessment_id), "round": round_no,
@@ -661,6 +661,18 @@ def sync_graph(deps: Deps, tenant_id, assessment_id) -> str | None:
     return err
 
 
+def _blocked_paths(deps: Deps, tenant_id, assessment_id) -> set[str]:
+    """PL-05: blocked paths are durable in PostgreSQL (survive a Redis flush); Redis is a fast cache."""
+    with _tx(deps, tenant_id) as conn:
+        durable = {r["path"] for r in rows(conn, "SELECT path FROM blocked_paths WHERE assessment_id = :a",
+                                           a=str(assessment_id))}
+    try:
+        cached = memory.blocked_paths(deps.r, assessment_id)
+    except redis.RedisError:
+        cached = set()
+    return durable | cached
+
+
 def _path_failed(deps: Deps, conn, tenant_id, a: dict, job: dict) -> bool:
     """PL-05: count consecutive failures per path; at the threshold the path is blocked (no retries, and the
     planner may not propose it again). Returns True when the path is now blocked."""
@@ -670,6 +682,9 @@ def _path_failed(deps: Deps, conn, tenant_id, a: dict, job: dict) -> bool:
     if n < memory.FAILURE_THRESHOLD:
         return False
     memory.block(deps.r, a["id"], path, minutes)
+    conn.execute(text("INSERT INTO blocked_paths (tenant_id, assessment_id, path, consecutive_failures, job_id) "
+                      "VALUES (:t, :a, :p, :n, :j) ON CONFLICT DO NOTHING"),
+                 {"t": str(tenant_id), "a": str(a["id"]), "p": path, "n": n, "j": str(job["id"])})
     audit.record(conn, tenant_id, "system:orchestrator", "plan.path_blocked",
                  {"path": path, "consecutive_failures": n, "job_id": str(job["id"])}, a["id"])
     return True

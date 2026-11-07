@@ -111,3 +111,22 @@ def test_stream_trim_and_daily_lock(deps):
     assert res is not None and res["stream_entries_trimmed"][bus.JOBS] >= 1
     assert [f["x"] for _, f in r.xrange(bus.JOBS) if "x" in f] == ["new"]
     assert retention.maybe_run_daily(r) is None  # once per day
+
+
+def test_audit_events_partitioned_monthly_and_maintained(clean):
+    from asvas import audit
+    from tests.test_lifecycle import tid_of
+    with system_tx() as conn:
+        parts = {r["relname"] for r in rows(conn, "SELECT c.relname FROM pg_inherits i JOIN pg_class c ON "
+                                                  "c.oid = i.inhrelid WHERE i.inhparent = 'audit_events'::regclass")}
+    this_month = f"audit_events_{dt.date.today():%Y%m}"
+    assert this_month in parts and "audit_events_default" in parts
+    res = retention.run(None)
+    assert isinstance(res["partitions_created"], list)
+    with tenant_tx(tid_of()) as conn:
+        audit.record(conn, tid_of(), "system:test", "x", {})
+        r = rows(conn, "SELECT tableoid::regclass::text AS p FROM audit_events ORDER BY id DESC LIMIT 1")[0]["p"]
+        assert r == this_month
+        assert audit.verify_chain(conn, tid_of())["ok"]
+    with pytest.raises(Exception, match="permission denied"), system_tx() as conn:  # no direct partition access
+        conn.execute(text(f"SELECT * FROM {this_month}"))

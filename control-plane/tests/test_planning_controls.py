@@ -141,3 +141,18 @@ def test_short_term_memory_has_ttl_and_is_erased_at_end(client, make_assessment,
     st = client.get(f"/api/v1/assessments/{aid}", headers=op).json()["status"]
     assert st == "COMPLETED"
     assert memory.keys(deps.r, aid) == []
+
+
+def test_blocked_path_survives_redis_flush(client, make_assessment, deps):
+    aid, op = start(client, make_assessment, deps, ports=(18080,), max_attempts=3)
+    for attempt in (1, 2, 3):
+        [job] = jobs_of(aid)
+        engine.ingest_result(deps, result(job, status="FAILED", exchanges=[], error="boom"))
+        if attempt < 3:
+            engine.advance(deps, tid_of(), aid)
+    path = path_id(job["tool_id"], job["target"])
+    deps.r.flushdb()
+    assert engine._blocked_paths(deps, tid_of(), aid) == {path}
+    with tenant_tx(tid_of()) as conn:
+        assert rows(conn, "SELECT consecutive_failures FROM blocked_paths WHERE path = :p", p=path)[0][
+            "consecutive_failures"] == 3

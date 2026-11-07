@@ -186,3 +186,14 @@ as the source of truth.
 - Done: `asvas/compliance_map.py`, new `sso-mfa` control, mappings in `/compliance/controls`, CSV export, Controls page columns and
   rule catalogue table. Tested: `test_compliance.py` 6 passed; Chromium check: 12 controls with mappings, disclaimer banner,
   12 rules, CSV download works, no page errors. Not reviewed by an auditor.
+
+### PL-05 durable blocked paths + DA-14 audit partitioning
+- Done: migration 0010 (`blocked_paths`; `audit_events` rebuilt as monthly range partitions with RLS, append-only trigger, grants,
+  `asvas_ensure_audit_partitions`), engine/retention/Controls updates.
+- **Incident (dev data):** the first version of migration 0010 copied rows as the table owner while FORCE ROW LEVEL SECURITY was on,
+  so it saw zero rows, copied nothing and dropped the old table. On the long-lived dev database this lost the audit history.
+  Fixed in the same commit (RLS lifted on the old table for the copy; count check). Verified on a populated database
+  (asvas_test, 300 events / 2 tenants): identical id/hash/prev_hash/created_at fingerprint before and after, RLS+FORCE restored,
+  chains verify, new writes land in the current month partition. Dev DB restored from the signed DA-10 export: events 1-460
+  recovered and cross-checked; events 461-583 (dev runs from 2026-11-07 after the export) are lost. No production data exists.
+- Tested: new tests in `test_planning_controls.py` and `test_retention.py`; Python suite 198 passed, 5 skipped (Qdrant not running).

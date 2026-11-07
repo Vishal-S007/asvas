@@ -54,6 +54,7 @@ def run(r: redis.Redis | None = None, retention_days: int | None = None) -> dict
     days = retention_days or get_settings().transient_retention_days
     with system_tx() as conn:
         created = [x[0] for x in conn.execute(text("SELECT asvas_ensure_log_partitions(7)"))]
+        created += [x[0] for x in conn.execute(text("SELECT asvas_ensure_audit_partitions(3)"))]
         dropped = [dict(m._mapping) for m in conn.execute(
             text("SELECT * FROM asvas_drop_expired_log_partitions(:d)"), {"d": days})]
     per_tenant: dict[str, dict[str, Any]] = {}
