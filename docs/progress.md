@@ -142,3 +142,9 @@ as the source of truth.
   No browser console errors. Full Python suite 149 passed.
 - Observed on the long-lived dev DB: controls flag pre-M3 data honestly (8 of 12 decisions unsigned, 28 of 40 evidence records
   stored before encryption existed).
+
+### M3 — NF-04 SBOM and dependency scanning (2026-11-07)
+- Done: `scripts/supply-chain.sh`, CI job `supply-chain` (uploads SBOMs + scan results as an artifact).
+- Tested locally: SBOMs control-plane (72 components, CycloneDX 1.6), execution-plane (34, 1.6), dashboard (6, 1.5);
+  pip-audit 69 packages / 0 vulns; npm audit 0; govulncheck 0 reachable (after x/net 0.60 -> 0.62; Go tests re-run, pass).
+  Confirmed pip-audit exits 1 on a deliberately vulnerable requirement. The CI job itself has not run yet (no push from here).

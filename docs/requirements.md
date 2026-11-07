@@ -120,7 +120,7 @@ Status legend:
 | NF-01 | API p95 < 200 ms, 500 tenants, 1000 parallel microVMs, 99.9 % uptime, RTO 15 min, RPO 5 min | 50-51 | Aspirational — not measured |
 | NF-02 | Precision ≥ 99 %, FP < 1 %, 80 % alert reduction, < 15 ms/endpoint | 39 | Aspirational — not measured, will not be displayed |
 | NF-03 | EKS + bare-metal EC2, Terraform, Helm, Prometheus/Grafana, OpenTelemetry | 1, 32-33, 51, 83, 88-89 | Planned (M4); no paid infra will be provisioned automatically |
-| NF-04 | Hash-pinned dependencies, image scanning in CI | 30, 79, 82 | Partial | `uv.lock`, `go.sum`, `package-lock.json`; image scanning N/A (no images yet) |
+| NF-04 | Hash-pinned dependencies, image scanning in CI | 30, 79, 82 | Partial (M3) | Lockfiles (`uv.lock`, `go.sum`, `package-lock.json`); CI job `supply-chain` (`scripts/supply-chain.sh`) produces CycloneDX SBOMs for all three components and fails on known vulnerabilities (pip-audit, govulncheck call-graph reachable, npm audit). Local run 2026-11-07: 0 known vulnerabilities after upgrading golang.org/x/net to v0.62.0; one unreachable advisory remains (GO-2026-5932, x/crypto/openpgp, not imported; fix only in an unreleased pseudo-version). Open: container image scanning N/A (no images); Python export has no hashes in the SBOM input; SBOMs not signed |
 | NF-05 | STRIDE threat model | 30 | Done | `docs/threat-model.md` |
 
 ---
