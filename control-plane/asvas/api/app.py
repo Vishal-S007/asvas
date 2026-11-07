@@ -497,6 +497,25 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                     {"feature": "Compliance mapping", "requirement": "DA-12", "reason": "planned M4"},
                 ]}
 
+    @api.get("/compliance/controls")
+    def compliance_controls(request: Request, p: Principal = Depends(rate_limited)):
+        """UI-04: read-only control status for auditors (and admins). Computed live; not a certification."""
+        if p.role not in ("auditor", "admin"):
+            raise HTTPException(403, f"requires role 'auditor' or 'admin' (you are '{p.role}')")
+        from asvas import compliance
+        health = deps_of(request).policy.health()
+        with tenant_tx(p.tenant_id) as conn:
+            return {"generated_at": time.time(), "tenant_id": str(p.tenant_id),
+                    "controls": compliance.controls(conn, p.tenant_id, health)}
+
+    @api.get("/system/policy")
+    def policy_source(p: Principal = Depends(role("operator"))):
+        """Advanced view (UI-03): the Rego policy currently on disk, read-only. Editing policy is not exposed."""
+        from asvas import compliance
+        base = compliance.policy_base()
+        return {"files": [{"path": str(f.relative_to(base)), "sha256": h, "source": f.read_text()}
+                          for f, h in compliance.policy_files()]}
+
     @api.post("/system/emergency-stop")
     def estop(body: EmergencyStop, request: Request, p: Principal = Depends(role("admin"))):
         return engine.emergency_stop(deps_of(request), p.tenant_id, p.user_id, body.reason)

@@ -7,16 +7,22 @@ import { Badge, PlannerLabel, StateView, When } from "../ui";
 import { ApprovalCard } from "./Approvals";
 import { PlanGraph } from "./PlanGraph";
 import { Topology } from "./Topology";
+import { bySeverity, usePersona } from "../persona";
 
 const ACTIVE = new Set(["PLANNING", "RUNNING", "AWAITING_APPROVAL", "REPORTING", "CANCELLING"]);
 const TABS = ["Overview", "Plan graph", "Jobs", "Findings", "Timeline", "Assets", "Report"] as const;
+const SIMPLE_TABS = ["Summary", "Fixes", "Report"] as const;
+type Tab = (typeof TABS)[number] | (typeof SIMPLE_TABS)[number];
 
 export function AssessmentDetailPage() {
   const { id } = useParams();
   const stream = useEventStream(`/assessments/${id}/events`);
   // Live updates come from the event stream; slow polling remains as a fallback if the stream drops.
   const r = useResource<Assessment>(`/assessments/${id}`, stream.state === "live" ? 15000 : 4000, stream.tick);
-  const [tab, setTab] = useState<(typeof TABS)[number]>("Overview");
+  const { persona } = usePersona();
+  const tabs: readonly Tab[] = persona === "simple" ? SIMPLE_TABS : TABS;
+  const [picked, setTab] = useState<Tab>("Overview");
+  const tab: Tab = tabs.includes(picked) ? picked : tabs[0];
   return (
     <StateView r={r}>
       {(a) => (
@@ -31,7 +37,7 @@ export function AssessmentDetailPage() {
             {a.failure_reason && <span className="bad">Failure: {a.failure_reason}</span>}
           </div>
           <div className="tabs" role="tablist">
-            {TABS.map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
+            {tabs.map((t) => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? "active" : ""} onClick={() => setTab(t)}>{t}</button>)}
           </div>
           {tab === "Overview" && <Overview a={a} />}
           {tab === "Plan graph" && <PlanTab id={a.id} active={ACTIVE.has(a.status)} tick={stream.tick} />}
@@ -40,6 +46,8 @@ export function AssessmentDetailPage() {
           {tab === "Timeline" && <TimelineTab id={a.id} active={ACTIVE.has(a.status)} tick={stream.tick} />}
           {tab === "Assets" && <AssetsTab id={a.id} />}
           {tab === "Report" && <ReportTab a={a} />}
+          {tab === "Summary" && <SimpleSummary a={a} />}
+          {tab === "Fixes" && <FixesTab a={a} />}
         </section>
       )}
     </StateView>
@@ -117,11 +125,65 @@ function PlanTab({ id, active, tick }: { id: string; active: boolean; tick: numb
   </StateView>;
 }
 
+function SimpleSummary({ a }: { a: Assessment }) {
+  const r = useResource<Finding[]>(`/assessments/${a.id}/findings`, ACTIVE.has(a.status) ? 5000 : 0);
+  const open = (r.data ?? []).filter((f) => f.state !== "resolved");
+  const count = (sev: string) => open.filter((f) => f.severity === sev).length;
+  return <div className="grid two">
+    <div className="card"><h3>Where things stand</h3>
+      <p>{ACTIVE.has(a.status) ? "The assessment is still running. Results below may change." :
+        a.status === "COMPLETED" ? "The assessment has finished." : `The assessment is ${a.status.toLowerCase().replace(/_/g, " ")}.`}</p>
+      <p><b>{open.length}</b> open issue{open.length === 1 ? "" : "s"}: {["high", "medium", "low", "info"].map((s) => <span key={s}><Badge v={s} /> {count(s)} </span>)}</p>
+      <p className="small muted">Open the <b>Fixes</b> tab for what to change, most important first. Switch to Advanced view for plans, logs and evidence.</p>
+      {a.status === "COMPLETED" && !open.length && <p className="small">No issues found by the implemented checks. That does not prove the systems are secure.</p>}
+    </div>
+    <PendingApprovals id={a.id} />
+  </div>;
+}
+
+function FixesTab({ a }: { a: Assessment }) {
+  const me = useMe();
+  const r = useResource<Finding[]>(`/assessments/${a.id}/findings`, ACTIVE.has(a.status) ? 5000 : 0);
+  const [msg, setMsg] = useState<string>();
+  const verify = async (fid: string) => {
+    setMsg(undefined);
+    try { await api(`/findings/${fid}/retest`, { method: "POST" }); setMsg("Re-check started. The result appears here when it finishes."); r.reload(); }
+    catch (e) { setMsg(e instanceof ApiError ? e.title : String(e)); }
+  };
+  return <>
+    {msg && <div className="banner">{msg}</div>}
+    <StateView r={r} empty={(d) => d.length === 0} emptyText="Nothing to fix from the implemented checks.">
+      {(fs) => <ol className="fixlist">{bySeverity(fs).map((f, i) => {
+        const last = f.retests[0];
+        return <li key={f.id} className={`card fix sev-${f.severity}`}>
+          <div className="cardhead"><b>{i + 1}. {f.title}</b> <Badge v={f.severity} /> {f.state === "resolved" && <Badge v="resolved" />}</div>
+          <div className="small muted">on <code>{f.asset}</code></div>
+          <p><b>What we saw:</b> {f.observed_behavior}</p>
+          <p><b>What to do:</b> {f.remediation}</p>
+          <p className="small">{f.verification_status === "confirmed" ? "Confirmed directly from the server's responses."
+            : "Not confirmed — suggested by text the server returned. Check before acting."}</p>
+          {last && <p className="small">Last re-check: <Badge v={last.outcome} /> <When t={last.completed_at ?? last.created_at} /></p>}
+          {can(me, "operator") && f.state !== "resolved" && <button className="btn" onClick={() => verify(f.id)}>Check if fixed</button>}
+        </li>;
+      })}</ol>}
+    </StateView>
+  </>;
+}
+
+function ExecutionLog({ jobId }: { jobId: string }) {
+  const [open, setOpen] = useState(false);
+  const r = useResource<{ id: number; attempt: number; event: string; detail: unknown; created_at: string }[]>(open ? `/jobs/${jobId}/execution-log` : null);
+  return <details onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}><summary className="small">log</summary>
+    {open && <StateView r={r} empty={(d) => d.length === 0} emptyText="No log lines (expired after the retention period, or not dispatched).">
+      {(lines) => <pre className="small">{lines.map((l) => `${l.created_at} #${l.attempt} ${l.event} ${JSON.stringify(l.detail)}`).join("\n")}</pre>}
+    </StateView>}</details>;
+}
+
 function JobsTab({ id, active, tick }: { id: string; active: boolean; tick: number }) {
   const r = useResource<Job[]>(`/assessments/${id}/jobs`, active ? 10000 : 0, tick);
   return <StateView r={r} empty={(d) => d.length === 0} emptyText="No jobs.">
     {(jobs) => <div className="tablewrap"><table>
-      <thead><tr><th>Tool</th><th>Target</th><th>Params</th><th>Risk</th><th>Status</th><th>Attempt</th><th>Policy</th><th>Executor</th></tr></thead>
+      <thead><tr><th>Tool</th><th>Target</th><th>Params</th><th>Risk</th><th>Status</th><th>Attempt</th><th>Policy</th><th>Executor</th><th>Log</th></tr></thead>
       <tbody>{jobs.map((j) => <tr key={j.id}>
         <td>{j.tool_id}{j.retest_of_finding && <div className="small muted">retest</div>}</td>
         <td><code>{j.target.scheme}://{j.target.host}:{j.target.port}</code></td>
@@ -132,6 +194,7 @@ function JobsTab({ id, active, tick }: { id: string; active: boolean; tick: numb
         <td className="small">{j.policy_decision ? (j.policy_decision.deny_reasons.length ? j.policy_decision.deny_reasons.join("; ") :
           j.policy_decision.require_approval ? "approval required" : "allowed") : "—"}</td>
         <td className="small">{j.last_result ? <>{j.last_result.backend}<div className="muted">{j.last_result.egress_mode}</div></> : "—"}</td>
+        <td><ExecutionLog jobId={j.id} /></td>
       </tr>)}</tbody>
     </table></div>}
   </StateView>;

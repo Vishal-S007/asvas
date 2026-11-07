@@ -12,6 +12,7 @@ DEV_USERS = [
     ("approver@acme.test", "Arun Approver", "approver", "acme"),
     ("operator@acme.test", "Olu Operator", "operator", "acme"),
     ("viewer@acme.test", "Vic Viewer", "viewer", "acme"),
+    ("auditor@acme.test", "Aud Auditor", "auditor", "acme"),
     ("operator@globex.test", "Gil Globex", "operator", "globex"),
 ]
 

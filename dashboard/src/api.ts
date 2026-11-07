@@ -46,8 +46,8 @@ export async function api<T>(path: string, init: { method?: string; body?: unkno
   return (await res.json()) as T;
 }
 
-export type Role = "viewer" | "operator" | "approver" | "admin";
-export const rank: Record<Role, number> = { viewer: 0, operator: 1, approver: 2, admin: 3 };
+export type Role = "viewer" | "auditor" | "operator" | "approver" | "admin";
+export const rank: Record<Role, number> = { viewer: 0, auditor: 0, operator: 1, approver: 2, admin: 3 };
 
 export interface Me { user_id: string; tenant_id: string; email: string; display_name: string; role: Role }
 export interface Assessment {

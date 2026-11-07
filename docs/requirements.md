@@ -110,8 +110,8 @@ Status legend:
 |---|---|---|---|---|
 | UI-01 | Responsive React dashboard with real-time execution graph, status, logs | 32, 43 | Done (M2) | Server-sent events of audit events (fetch-streamed, bearer header, Last-Event-ID resume) drive live refresh; polling fallback |
 | UI-02 | HITL approval queue | 32 | Done | |
-| UI-03 | Persona modes (junior vs advanced views) | 42-44 | Planned (M3) | |
-| UI-04 | Read-only auditor dashboard | 60 | Partial | `viewer` role sees audit log read-only |
+| UI-03 | Persona modes (junior vs advanced views) | 42-44 | Partial (M3) | Per-user Simplified/Advanced toggle. Simplified: Summary, prioritised "Fixes" (what we saw / what to do / confirmed-or-not / "Check if fixed" retest), Report. Advanced: plan graph, jobs with raw execution log, evidence, timeline, read-only Rego policy source. Display preference only (server permissions unchanged). Verified in Chromium via Playwright. Open: OPA policy customisation from the UI is not offered (policy changes stay code-reviewed); no intermediate persona |
+| UI-04 | Read-only auditor dashboard | 60, 77-78 | Done (M3) | `auditor` role (read-only; every mutating endpoint refuses it) and `/compliance/controls`: live status of audit chain, signed export, approver signatures, dual control, encryption at rest, transport TLS, emergency stop, OPA policy digests, retention, isolation (Firecracker shown as missing). Tests `test_compliance.py`; UI checked in Chromium. Not a certification; framework mapping is DA-12 |
 
 ## 7. Operations / NFR (not claimed)
 

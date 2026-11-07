@@ -3,6 +3,7 @@ import { api, ApiError } from "../api";
 import { can, useMe } from "../App";
 import { useResource } from "../hooks";
 import { Badge, StateView, When } from "../ui";
+import { usePersona } from "../persona";
 
 interface Worker { worker_id: string; heartbeat_unix: number; backend: string; isolation_level: string; egress_mode: string; note: string;
   slots: number; running_jobs: number; policy_sha256: string; version: string; uid: number; stale: boolean; loopback_targets_allowed: boolean;
@@ -47,9 +48,27 @@ export function SystemPage() {
                 <dt>Heartbeat</dt><dd><When t={new Date(w.heartbeat_unix * 1000).toISOString()} /> · uid {w.uid} · v{w.version}</dd>
               </dl>
             </div>))}</div>}
+        <PolicySource />
       </>}</StateView>
     </section>
   );
+}
+
+function PolicySource() {
+  const me = useMe();
+  const { persona } = usePersona();
+  const [open, setOpen] = useState(false);
+  const r = useResource<{ files: { path: string; sha256: string; source: string }[] }>(open ? "/system/policy" : null);
+  if (persona !== "advanced" || !can(me, "operator")) return null;
+  return <>
+    <h2>Policy source (read-only)</h2>
+    <p className="small muted">The Rego policy the control plane loads. Changing policy is a reviewed code change, not a dashboard action.</p>
+    <details onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}><summary>Show policy files</summary>
+      {open && <StateView r={r}>{(d) => <>{d.files.map((f) => <div key={f.path} className="card">
+        <div className="cardhead"><code>{f.path}</code> <code className="hash small">{f.sha256}</code></div>
+        <pre className="small">{f.source}</pre></div>)}</>}</StateView>}
+    </details>
+  </>;
 }
 
 export function EmergencyStopButton() {

@@ -18,7 +18,9 @@ from sqlalchemy import text
 from asvas.config import get_settings
 from asvas.db import get_engine
 
-ROLE_RANK = {"viewer": 0, "operator": 1, "approver": 2, "admin": 3}
+# "auditor" is read-only like "viewer" (rank 0: no mutating endpoint accepts it) and additionally may open the
+# compliance controls view (UI-04).
+ROLE_RANK = {"viewer": 0, "auditor": 0, "operator": 1, "approver": 2, "admin": 3}
 _bearer = HTTPBearer(auto_error=False)
 
 

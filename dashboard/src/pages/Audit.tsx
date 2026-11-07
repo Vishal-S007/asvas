@@ -19,7 +19,7 @@ export function AuditPage() {
         <div className="actions"><input placeholder="Filter event type / actor" value={q} onChange={(e) => setQ(e.target.value)} />
           <button className="btn" onClick={check}>Verify hash chain</button></div></div>
       {verify && <div className={`banner ${verify.startsWith("Hash") ? "" : "bad"}`}>{verify}</div>}
-      <p className="small muted">Append-only, per-tenant SHA-256 hash chain in PostgreSQL. External WORM export is planned (DA-10).</p>
+      <p className="small muted">Append-only, per-tenant SHA-256 hash chain in PostgreSQL. Signed write-once export: <code>asvas audit-export</code> / <code>audit-verify-export</code> (DA-10).</p>
       <StateView r={r} empty={(d) => d.length === 0}>
         {(evs) => <div className="tablewrap"><table>
           <thead><tr><th>#</th><th>Time</th><th>Event</th><th>Actor</th><th>Assessment</th><th>Data</th></tr></thead>

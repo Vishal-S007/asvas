@@ -133,3 +133,12 @@ as the source of truth.
 - Done: `planning/agents.py`; graph nodes per agent; sub-schema enforcement in `validate_proposal`; agent-namespaced step ids.
 - Tested: `test_agents.py` 3 passed (agents see only their tools, cross-role proposals rejected with PL-10 reason, agents with no
   permitted tools are not called). Full Python suite 145 passed.
+
+### M3 — UI-03 / UI-04 (2026-11-07)
+- Done: migration 0009 (`auditor` role) + seeded `auditor@acme.test`; `asvas/compliance.py`; `/compliance/controls`, `/system/policy`;
+  dashboard persona toggle, Summary/Fixes views, job execution log, policy viewer, Controls page.
+- Tested: `test_compliance.py` 4 passed; Playwright run against the TLS dev stack: auditor sees 10 controls and no emergency-stop button;
+  operator Simplified shows Summary/Fixes/Report with 6 prioritised fixes; Advanced shows all tabs, job log lines and policy file.
+  No browser console errors. Full Python suite 149 passed.
+- Observed on the long-lived dev DB: controls flag pre-M3 data honestly (8 of 12 decisions unsigned, 28 of 40 evidence records
+  stored before encryption existed).

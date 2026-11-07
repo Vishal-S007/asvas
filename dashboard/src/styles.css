@@ -84,3 +84,12 @@ ul.plain { padding-left: 16px; margin: 0; }
   .shell { grid-template-columns: 1fr; } .sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
   main { padding: 0 16px 32px; } .kv { grid-template-columns: 1fr; } .grid, .grid.two { grid-template-columns: 1fr; }
 }
+
+.persona { display: flex; gap: 6px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+.btn.small { padding: 2px 8px; font-size: 12px; }
+.fix { border-left: 4px solid var(--border); }
+.fix.sev-high, .fix.sev-critical { border-left-color: var(--bad); }
+.fix.sev-medium { border-left-color: var(--warn); }
+.fix.sev-low { border-left-color: var(--info); }
+.fix ol { margin: 6px 0 0 18px; padding: 0; }
+.fixlist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
