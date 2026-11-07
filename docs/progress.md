@@ -159,3 +159,7 @@ as the source of truth.
   Live e2e (Chromium -> Keycloak -> API): returning user with password + TOTP -> amr ["pwd","otp"], /me OK (operator, auditor);
   first-time user enrols TOTP -> enrolment-only token refused (no otp) -> forced re-login with code -> OK (approver, globex operator).
 - Full Python suite 166 passed.
+
+### DA-15 Bloom-filter dedupe
+- Done: `asvas/dedupe.py`, Bloom-filtered `correlate_assets`, result size cap. Tested: `test_dedupe.py` 5 passed; full suite 171 passed.
+- Substitution noted: no streaming JSON parser, because results are protobuf with a size cap.

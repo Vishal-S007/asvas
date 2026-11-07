@@ -75,6 +75,11 @@ def decode_envelope(fields: dict[str, str]) -> dict[str, Any] | None:
     return wire.envelope_from_pb(wire.parse(wire.pb.JobEnvelope, data))
 
 
+# Upper bound for one serialized JobResult (base64). Executor caps per-response excerpts and request counts, so
+# legitimate results are far smaller; anything larger is dropped before decoding.
+MAX_RESULT_B64 = 8 * 1024 * 1024
+
+
 def encode_result(result: dict[str, Any]) -> dict[str, str]:
     data = wire.result_to_pb(result).SerializeToString(deterministic=True)
     return {"result_pb": wire.b64(data), "sig": _mac("result", data)}
@@ -82,8 +87,11 @@ def encode_result(result: dict[str, Any]) -> dict[str, str]:
 
 def verify_result(fields: dict[str, str]) -> dict[str, Any] | None:
     """Authenticate and decode a JobResult. None if the signature is wrong or the payload is malformed."""
+    raw = fields.get("result_pb", "")
+    if len(raw) > MAX_RESULT_B64:  # DA-15: bounded parse instead of buffering arbitrarily large results
+        return None
     try:
-        data = wire.unb64(fields.get("result_pb", ""))
+        data = wire.unb64(raw)
         if not _mac_ok("result", data, fields.get("sig", "")):
             return None
         return wire.result_from_pb(wire.parse(wire.pb.JobResult, data))

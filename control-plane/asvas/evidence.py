@@ -7,6 +7,7 @@ Findings are derived only from stored evidence by fixed rules. A model never cre
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -112,9 +113,32 @@ def upsert_asset(conn: Connection, tenant_id, assessment_id, kind: str, identifi
         {"t": str(tenant_id), "a": str(assessment_id), "k": kind, "i": identifier, "at": json.dumps(attrs)}).scalar()
 
 
-def correlate_assets(conn: Connection, tenant_id, assessment_id, target: dict, exchanges: list[dict]) -> uuid.UUID:
+def _record_key(kind: str, identifier: str, attrs: dict) -> str:
+    return f"{kind}|{identifier}|" + hashlib.sha256(json.dumps(attrs, sort_keys=True).encode()).hexdigest()
+
+
+def _discovered(conn: Connection, tenant_id, assessment_id, kind: str, identifier: str, attrs: dict, bloom,
+                stats: dict) -> uuid.UUID:
+    """DA-15: Bloom-filtered upsert. Definitely-new records are written; maybe-seen ones are checked exactly and
+    skipped only when the stored record already holds identical attributes."""
+    if bloom is not None and bloom.add(_record_key(kind, identifier, attrs)):
+        cur = conn.execute(text("SELECT id, attributes FROM assets WHERE assessment_id = :a AND kind = :k "
+                                "AND identifier = :i"), {"a": str(assessment_id), "k": kind, "i": identifier}).first()
+        if cur is not None and all(cur.attributes.get(k) == v for k, v in attrs.items()):
+            stats["duplicates_skipped"] += 1
+            return cur.id
+        stats["bloom_false_positives"] += cur is None
+    stats["written"] += 1
+    return upsert_asset(conn, tenant_id, assessment_id, kind, identifier, attrs)
+
+
+def correlate_assets(conn: Connection, tenant_id, assessment_id, target: dict, exchanges: list[dict],
+                     bloom=None, stats: dict | None = None) -> uuid.UUID:
+    stats = stats if stats is not None else {}
+    for k in ("written", "duplicates_skipped", "bloom_false_positives"):
+        stats.setdefault(k, 0)
     ips = sorted({e["request"]["resolved_ip"] for e in exchanges if e.get("request", {}).get("resolved_ip")})
-    host_id = upsert_asset(conn, tenant_id, assessment_id, "host", target["host"], {"resolved_ips": ips})
+    host_id = _discovered(conn, tenant_id, assessment_id, "host", target["host"], {"resolved_ips": ips}, bloom, stats)
     svc = f"{target['scheme']}://{target['host']}:{target['port']}"
     attrs: dict[str, Any] = {"scheme": target["scheme"], "port": target["port"]}
     finals = [e for e in exchanges if e.get("response")]
@@ -122,11 +146,12 @@ def correlate_assets(conn: Connection, tenant_id, assessment_id, target: dict, e
         hdrs = _headers(finals[-1])
         if "server" in hdrs:
             attrs["server_banner_untrusted"] = hdrs["server"][:200]
-    svc_id = upsert_asset(conn, tenant_id, assessment_id, "service", svc, attrs)
-    conn.execute(text(
-        "INSERT INTO asset_relations (tenant_id, assessment_id, src_asset, dst_asset, relation) "
-        "VALUES (:t,:a,:s,:d,'exposes') ON CONFLICT DO NOTHING"),
-        {"t": str(tenant_id), "a": str(assessment_id), "s": str(host_id), "d": str(svc_id)})
+    svc_id = _discovered(conn, tenant_id, assessment_id, "service", svc, attrs, bloom, stats)
+    if bloom is None or not bloom.add(f"rel|{host_id}|{svc_id}|exposes"):
+        conn.execute(text(
+            "INSERT INTO asset_relations (tenant_id, assessment_id, src_asset, dst_asset, relation) "
+            "VALUES (:t,:a,:s,:d,'exposes') ON CONFLICT DO NOTHING"),
+            {"t": str(tenant_id), "a": str(assessment_id), "s": str(host_id), "d": str(svc_id)})
     return svc_id
 
 

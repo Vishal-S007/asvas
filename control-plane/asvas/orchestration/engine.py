@@ -587,7 +587,10 @@ def ingest_result(deps: Deps, fields: dict[str, str]) -> str:
                          "requests_used": res.get("requests_used"), "requests": retention.exchange_lines(exchanges)})
         ev_ids = store_exchanges(conn, tenant_id, a["id"], job_id, attempt, exchanges) if exchanges else {}
         if status == "SUCCEEDED":
-            svc = correlate_assets(conn, tenant_id, a["id"], job["target"], exchanges)
+            dstats: dict = {}
+            svc = correlate_assets(conn, tenant_id, a["id"], job["target"], exchanges,
+                                   memory.bloom(deps.r, a["id"], a["testing_policy"]["max_wall_clock_minutes"]), dstats)
+            retention.write(conn, tenant_id, a["id"], job_id, attempt, "discovery_dedupe", dstats)
             hits = evaluate_rules(job["tool_id"], job["target"], exchanges)
             if job["retest_of_finding"]:
                 _complete_retest(conn, tenant_id, a, job, hits, ev_ids)

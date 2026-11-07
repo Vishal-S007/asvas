@@ -58,3 +58,9 @@ def notes(r: redis.Redis, assessment_id) -> dict[int, dict]:
 
 def keys(r: redis.Redis, assessment_id) -> list[str]:
     return list(r.scan_iter(prefix(assessment_id) + "*"))
+
+
+def bloom(r: redis.Redis, assessment_id, wall_clock_minutes: int):
+    """DA-15: per-run discovery de-duplication filter (erased with the rest of short-term memory)."""
+    from asvas.dedupe import BloomFilter
+    return BloomFilter(r, prefix(assessment_id) + "bloom", _ttl(wall_clock_minutes))
