@@ -56,13 +56,22 @@ def verify_chain(conn: Connection, tenant_id: uuid.UUID | str) -> dict[str, Any]
     n = 0
     for r in conn.execute(text("SELECT * FROM audit_events WHERE tenant_id = :t ORDER BY id"), {"t": str(tenant_id)}):
         m = r._mapping
-        body = {
-            "tenant_id": str(m["tenant_id"]), "assessment_id": str(m["assessment_id"]) if m["assessment_id"] else None,
-            "actor": m["actor"], "event_type": m["event_type"], "data": _floats_to_str(m["data"]),
-            "created_at": m["created_at"].astimezone(dt.UTC).isoformat(), "prev_hash": m["prev_hash"],
-        }
-        if m["prev_hash"] != prev or sha256_hex(canonical_json(body)) != m["hash"]:
+        if m["prev_hash"] != prev or event_hash(event_record(m)) != m["hash"]:
             return {"ok": False, "events": n, "broken_at": m["id"]}
         prev = m["hash"]
         n += 1
     return {"ok": True, "events": n, "broken_at": None}
+
+
+def event_record(m) -> dict[str, Any]:
+    """Portable form of one stored event (used by verification and the WORM export)."""
+    return {"id": m["id"], "tenant_id": str(m["tenant_id"]),
+            "assessment_id": str(m["assessment_id"]) if m["assessment_id"] else None,
+            "actor": m["actor"], "event_type": m["event_type"], "data": m["data"],
+            "created_at": m["created_at"].astimezone(dt.UTC).isoformat(), "prev_hash": m["prev_hash"], "hash": m["hash"]}
+
+
+def event_hash(ev: dict[str, Any]) -> str:
+    body = {k: ev[k] for k in ("tenant_id", "assessment_id", "actor", "event_type", "created_at", "prev_hash")}
+    body["data"] = _floats_to_str(ev["data"])
+    return sha256_hex(canonical_json(body))

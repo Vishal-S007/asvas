@@ -48,6 +48,7 @@ os.environ.update({
     "ASVAS_DISPATCH_GRACE_SECONDS": "2",
     "ASVAS_RATE_LIMIT_PER_MINUTE": "100000",
     "ASVAS_KEYRING_FILE": os.path.join(tempfile.mkdtemp(prefix="asvas-keys-"), "keyring.json"),
+    "ASVAS_AUDIT_SIGNING_KEY_FILE": os.path.join(tempfile.mkdtemp(prefix="asvas-ledger-"), "audit-signing.pem"),
 })
 
 
@@ -104,7 +105,7 @@ def clean(migrated):
     with eng.begin() as c:
         c.execute(text("TRUNCATE tenants, users, assessments, plan_nodes, jobs, job_results, approvals, evidence, assets, "
                        "asset_relations, findings, finding_retests, audit_events, tenant_controls, "
-                       "checkpoints, checkpoint_blobs, checkpoint_writes, reports, approver_keys CASCADE"))
+                       "checkpoints, checkpoint_blobs, checkpoint_writes, reports, approver_keys, audit_checkpoints CASCADE"))
     seed(eng)
     eng.dispose()
     r = get_redis()

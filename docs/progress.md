@@ -107,3 +107,11 @@ as the source of truth.
 - Tested: `test_approver_signatures.py` 7 passed (recording, unsigned refused, cross-decision/binding/expiry replay refused, other user's
   key refused, revoked key refused, signed rejection, key validation). Demo: unsigned approval -> 403, signed -> APPROVED, 6 findings.
 - Incomplete: WebAuthn (hardware-backed keys, attestation); executor-side signature verification.
+
+### M3 — DA-10 signed audit export (2026-11-07)
+- Done: migration 0006 (`audit_checkpoints`, append-only); `asvas/audit_export.py`; CLI `audit-export`, `audit-public-key`,
+  `audit-verify-export [--db]`. Ledger key `var/keys/audit-signing.pem` (0600, created in dev, required in production).
+- Tested: `test_audit_export.py` 9 passed (incremental chain, write-once, tampered segment, forged checkpoint, deleted checkpoint,
+  wrong key, DB owner deletes an event with the trigger disabled -> cross-check reports it, checkpoint rows append-only, key mode).
+  Dev stack: 460 events exported and cross-checked OK.
+- Incomplete: immutable storage backend (Object Lock); scheduled export.

@@ -116,6 +116,13 @@ def main(argv: list[str] | None = None) -> int:
     keys = sub.add_parser("keys", help="key ring: status | rotate | rewrap")
     keys.add_argument("action", choices=["status", "rotate", "rewrap"])
     sub.add_parser("graph-resync", help="rebuild the Neo4j projection from PostgreSQL")
+    ax = sub.add_parser("audit-export", help="append new audit events to a write-once export with signed checkpoints")
+    ax.add_argument("out_dir")
+    av = sub.add_parser("audit-verify-export", help="verify an export offline; --db also cross-checks the database")
+    av.add_argument("export_dir")
+    av.add_argument("--public-key", required=True, help="base64 Ed25519 ledger public key")
+    av.add_argument("--db", action="store_true")
+    sub.add_parser("audit-public-key", help="print the ledger public key (distribute out of band)")
     a = p.parse_args(argv)
     if a.cmd == "migrate":
         migrate()
@@ -151,6 +158,16 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "keys":
         from asvas import keymgmt
         print(json.dumps(getattr(keymgmt, a.action)(), indent=2))
+    elif a.cmd in ("audit-export", "audit-verify-export", "audit-public-key"):
+        from asvas import audit_export as ax_
+        if a.cmd == "audit-export":
+            print(json.dumps(ax_.export(a.out_dir), indent=2))
+        elif a.cmd == "audit-public-key":
+            print(ax_.public_key_b64(ax_.load_signing_key()))
+        else:
+            res = (ax_.cross_check if a.db else ax_.verify)(a.export_dir, a.public_key)
+            print(json.dumps(res, indent=2))
+            return 0 if res["ok"] else 1
     elif a.cmd == "graph-resync":
         from asvas.db import list_tenant_ids, rows, tenant_tx
         from asvas.orchestration.engine import Deps, sync_graph

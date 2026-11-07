@@ -59,6 +59,8 @@ class Settings(BaseSettings):
 
     # Key ring for envelope encryption at rest (local-file KMS stand-in; must be outside the repo, mode 0600).
     keyring_file: str = "../var/keys/keyring.json"
+    # Ed25519 key that signs audit-export checkpoints (DA-10); outside the repo, mode 0600.
+    audit_signing_key_file: str = "../var/keys/audit-signing.pem"
 
     rate_limit_per_minute: int = 100  # spec p.86
     approval_ttl_minutes: int = 15
