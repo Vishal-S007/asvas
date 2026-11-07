@@ -35,29 +35,36 @@ sudo -u postgres psql -f scripts/db-bootstrap.sql
 # 2. OPA binary (or install from openpolicyagent.org) into .tools/
 GOBIN=$PWD/.tools go install github.com/open-policy-agent/opa@v1.21.4
 # 3. config + development mTLS certificates for the executor's gRPC channel
-cp .env.example .env            # dev placeholders; never commit .env
+cp .env.example .env            # dev placeholders; never commit .env (defaults to TLS for every local service)
 ./scripts/dev-certs.sh          # writes var/certs/ (git-ignored); dev-up.sh also does this if missing
+sudo ./scripts/dev-tls-services.sh   # PostgreSQL TLS 1.3 required + TLS-only Redis on :6380 (CP-10)
 # 4. control plane deps
 (cd control-plane && uv sync --frozen)
 # 5. start OPA, API, orchestrator, executor and the local test target (logs in var/logs/)
 sudo ./scripts/dev-up.sh        # root only needed for sandbox UID drop + nftables
 # 6. dashboard
-(cd dashboard && npm ci && npm run dev)   # http://127.0.0.1:5173
+(cd dashboard && npm ci && NODE_EXTRA_CA_CERTS=../var/certs/ca.crt ASVAS_API_URL=https://localhost:8000 npm run dev)
 ./scripts/dev-down.sh           # stop everything
 ```
 
-Walkthrough: [docs/demo.md](docs/demo.md). Scripted version: `python3 scripts/demo.py`.
+Walkthrough: [docs/demo.md](docs/demo.md). Scripted version:
+`ASVAS_API_URL=https://localhost:8000 ASVAS_CA_FILE=var/certs/ca.crt python3 scripts/demo.py`.
+
+Operations: `asvas audit-export DIR` / `asvas audit-verify-export DIR --public-key K [--db]` (signed write-once audit
+export), `asvas retention` (normally runs daily inside the orchestrator), `asvas keys status|rotate|rewrap`,
+`./scripts/supply-chain.sh` (SBOMs + dependency scanning).
 
 ## Tests
 
 ```bash
 (cd policies && ../.tools/opa test -v .)                  # 21 Rego policy tests
 (cd execution-plane && sudo go test ./...)                # 21 executor tests: isolation, approvals, rebinding, TLS, mTLS, cancel
-(cd control-plane && uv run pytest)                       # 99: unit, API, lifecycle, wire, Neo4j, SSE, PDF, E2E incl. gRPC/mTLS
+(cd control-plane && uv run pytest)                       # 149: unit, API, lifecycle, signatures, audit export, retention,
+                                                          # agents, cost limits, service TLS, compliance, E2E incl. gRPC/mTLS
 (cd dashboard && npm run typecheck && npm run build)
 ```
 
-CI: `.github/workflows/ci.yml` (not yet run — no remote repository configured).
+CI: `.github/workflows/ci.yml` (policy, execution plane, control plane, dashboard, supply-chain jobs).
 
 ## Safety model in one paragraph
 
