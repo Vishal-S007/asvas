@@ -205,3 +205,18 @@ as the source of truth.
 - PO-10 implemented, not verified: Firecracker backend, guest agent, tap egress, rootfs builder, host check/setup scripts,
   `docs/firecracker-runbook.md`. Simulated-Firecracker tests pass (7); rootfs built (64 MiB ext4, agent as init, e2fsck clean);
   `scripts/firecracker-host-check.sh` on this host: NOT READY (no /dev/kvm, no vmx/svm, no firecracker binaries).
+
+### M4 batch — final verification (2026-11-08 ~04:20 IST)
+- OPA 21/21 · Go: all packages ok (34 tests incl. real eBPF kill) · Python 203 passed, 0 skipped (TLS services, Keycloak,
+  Qdrant running) · dashboard typecheck + build OK · supply chain: 78 Python pkgs / 0 vulns, npm 0, Go 0 reachable;
+  SBOMs 82 / 35 / 6 components · proto regenerated with no diff.
+- Demo over TLS: unsigned approval 403, signed approved, 6 findings, audit chain ok; every sandbox result credential-verified;
+  long-term memory stored for the run; executor self-tests: nftables egress and eBPF monitor passed.
+- OIDC e2e: password + TOTP, amr ["pwd","otp"], API /me OK.
+
+## What still blocks "complete"
+1. PO-10 Firecracker: never booted — needs a KVM host and the runbook's integration run.
+2. NF-01/02/03: scale, availability, accuracy targets and cloud deployment (EKS/Terraform/Helm/observability) are not built
+   or measured; no paid infrastructure was provisioned.
+3. Identity/keys: Keycloak in dev mode (H2); no Vault/KMS (local key files stand in); WebAuthn not used.
+4. Independent security review / penetration test of ASVAS itself has not been done.

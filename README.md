@@ -1,11 +1,12 @@
-# ASVAS — Autonomous Security Validation Agent System (Milestones 1–3, in progress)
+# ASVAS — Autonomous Security Validation Agent System (Milestones 1–4)
 
 A security validation platform for **explicitly authorized** environments: it accepts an assessment scope and
 testing policy, creates a bounded plan, runs permitted non-destructive checks through controlled tool adapters,
 stores real evidence, derives evidence-backed findings, pauses for human approvals, supports retesting, and keeps
 a hash-chained audit trail.
 
-> **Status: development milestones 1–3. Not production-ready and not enterprise-ready.** See
+> **Status: development milestones 1–4. Not production-ready and not enterprise-ready.** Firecracker isolation is
+> implemented but has never run on a KVM host, and the scale/accuracy targets (NF-01..03) are not measured. See
 > [docs/requirements.md](docs/requirements.md) for what is implemented, partial, substituted, or planned, and
 > [Limitations](#limitations) below.
 
@@ -56,15 +57,18 @@ Walkthrough: [docs/demo.md](docs/demo.md). Scripted version:
 
 Operations: `asvas audit-export DIR` / `asvas audit-verify-export DIR --public-key K [--db]` (signed write-once audit
 export), `asvas retention` (normally runs daily inside the orchestrator), `asvas keys status|rotate|rewrap`,
-`./scripts/supply-chain.sh` (SBOMs + dependency scanning).
+`./scripts/supply-chain.sh` (SBOMs + dependency scanning), `ASVAS_MCP_TOKEN=<token> uv run asvas mcp` (read-only MCP server).
+Firecracker: `scripts/firecracker-host-check.sh`, [docs/firecracker-runbook.md](docs/firecracker-runbook.md).
 
 ## Tests
 
 ```bash
 (cd policies && ../.tools/opa test -v .)                  # 21 Rego policy tests
-(cd execution-plane && sudo go test ./...)                # 21 executor tests: isolation, approvals, rebinding, TLS, mTLS, cancel
-(cd control-plane && uv run pytest)                       # 149: unit, API, lifecycle, signatures, audit export, retention,
-                                                          # agents, cost limits, service TLS, compliance, E2E incl. gRPC/mTLS
+(cd execution-plane && sudo go test ./...)                # 34 tests: sandbox, eBPF syscall monitor (real kernel), Firecracker
+                                                          # backend (simulated API/guest), credentials, mTLS, rebinding, cancel
+(cd control-plane && uv run pytest)                       # 203: unit, API, OIDC, lifecycle, signatures, audit export, retention,
+                                                          # agents, cost limits, Qdrant memory, MCP, rules, service TLS, E2E
+(cd dashboard && node e2e/oidc-sso.e2e.cjs operator@acme.test)   # SSO + TOTP end to end (needs Keycloak + npm run dev)
 (cd dashboard && npm run typecheck && npm run build)
 ```
 
