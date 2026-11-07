@@ -57,7 +57,7 @@ def test_complete_local_assessment_workflow(client, make_assessment, deps, execu
     assert len(pend) == 2
     for x in pend:
         r = client.post(f"/api/v1/approvals/{x['id']}/decision",
-                        json={"decision": "approve", "binding_hash": x["binding_hash"]}, headers=apr)
+                        json=client.signed(apr, x), headers=apr)
         assert r.status_code == 200, r.text
     a = wait_status(client, op, aid, {"COMPLETED", "FAILED"}, 60)
     assert a["status"] == "COMPLETED", a

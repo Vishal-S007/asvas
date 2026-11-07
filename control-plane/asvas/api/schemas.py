@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -33,6 +34,14 @@ class ApprovalDecision(_In):
     decision: Literal["approve", "reject"]
     binding_hash: str = Field(pattern=r"^[0-9a-f]{64}$", description="The binding hash shown to the approver")
     reason: str | None = Field(default=None, max_length=500)
+    key_id: uuid.UUID | None = Field(default=None, description="Registered approver key used to sign")
+    signature: str | None = Field(default=None, max_length=200, description="Base64 Ed25519 signature over "
+                                  "asvas-approval-v1|<approval id>|<decision>|<binding hash>|<expires unix>")
+
+
+class ApproverKeyIn(_In):
+    public_key: str = Field(max_length=100, description="Base64 raw 32-byte Ed25519 public key")
+    label: str | None = Field(default=None, max_length=100)
 
 
 class EmergencyStop(_In):

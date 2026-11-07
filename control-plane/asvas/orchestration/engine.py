@@ -5,6 +5,7 @@ All state changes go through statemachine.* and are audited in the same transact
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import logging
@@ -18,7 +19,7 @@ from typing import Any
 import redis
 from sqlalchemy import Connection, Engine, text
 
-from asvas import audit
+from asvas import audit, signatures
 from asvas.canonical import binding_hash, canonical_json
 from asvas.config import get_settings
 from asvas.db import list_tenant_ids, row, rows, tenant_tx
@@ -301,7 +302,8 @@ def _request_approval(conn: Connection, a: dict, job_id, requested_by) -> uuid.U
 
 
 def decide_approval(deps: Deps, tenant_id, approval_id, actor_id, actor_role: str, decision: str,
-                    presented_binding_hash: str, reason: str | None = None) -> dict:
+                    presented_binding_hash: str, reason: str | None = None, key_id=None,
+                    signature: str | None = None) -> dict:
     with _tx(deps, tenant_id) as conn:
         ap = row(conn, "SELECT * FROM approvals WHERE id = :id FOR UPDATE", id=str(approval_id))
         if ap is None:
@@ -328,6 +330,11 @@ def decide_approval(deps: Deps, tenant_id, approval_id, actor_id, actor_role: st
             if job["status"] == "AWAITING_APPROVAL":
                 transition_job(conn, tenant_id, job["id"], "DENIED", "system:approvals", "approval binding mismatch")
             raise AuditedRefusal("action parameters changed since approval was requested; approval invalidated")
+        sig = _verify_decision_signature(conn, tenant_id, ap, actor, actor_id, decision, key_id, signature)
+        if sig:
+            conn.execute(text("UPDATE approvals SET signer_key_id=:k, signature=:s, signed_message=:m WHERE id=:id"),
+                         {"k": sig["key_id"], "s": base64.b64decode(signature), "m": sig["message"],
+                          "id": str(approval_id)})
         if decision == "approve":
             exp = int(ap["expires_at"].timestamp())
             token = bus.approval_token(str(approval_id), ap["binding_hash"], exp)
@@ -336,17 +343,45 @@ def decide_approval(deps: Deps, tenant_id, approval_id, actor_id, actor_role: st
                          {"u": str(actor_id), "tok": token, "r": reason, "id": str(approval_id)})
             audit.record(conn, tenant_id, actor, "approval.approved",
                          {"approval_id": str(approval_id), "job_id": str(job["id"]), "binding_hash": ap["binding_hash"],
-                          "expires_at": ap["expires_at"].isoformat(), "role": actor_role}, ap["assessment_id"])
+                          "expires_at": ap["expires_at"].isoformat(), "role": actor_role,
+                          "signature": {**sig, "signature": signature} if sig else None}, ap["assessment_id"])
             transition_job(conn, tenant_id, job["id"], "QUEUED", actor)
         else:
             conn.execute(text("UPDATE approvals SET status='REJECTED', decided_by=:u, decided_at=now(), reason=:r WHERE id=:id"),
                          {"u": str(actor_id), "r": reason, "id": str(approval_id)})
-            audit.record(conn, tenant_id, actor, "approval.rejected", {"approval_id": str(approval_id), "reason": reason},
-                         ap["assessment_id"])
+            audit.record(conn, tenant_id, actor, "approval.rejected",
+                         {"approval_id": str(approval_id), "reason": reason,
+                          "signature": {**sig, "signature": signature} if sig else None}, ap["assessment_id"])
             transition_job(conn, tenant_id, job["id"], "DENIED", actor, "approval rejected")
         assessment_id = ap["assessment_id"]
     advance(deps, tenant_id, assessment_id)
     return {"approval_id": str(approval_id), "status": "APPROVED" if decision == "approve" else "REJECTED"}
+
+
+def _verify_decision_signature(conn, tenant_id, ap: dict, actor: str, actor_id, decision: str, key_id,
+                               signature: str | None) -> dict | None:
+    """PO-04: check the approver's Ed25519 signature over the canonical decision message (refusals are audited)."""
+    required = get_settings().approval_signatures == "required"
+    if key_id is None and signature is None and not required:
+        return None
+    message = signatures.decision_message(ap["id"], decision, ap["binding_hash"], int(ap["expires_at"].timestamp()))
+
+    def refuse(why: str) -> None:
+        audit.record(conn, tenant_id, actor, "approval.signature_refused",
+                     {"approval_id": str(ap["id"]), "reason": why, "key_id": str(key_id) if key_id else None},
+                     ap["assessment_id"])
+        raise AuditedRefusal(f"approval signature refused: {why}", 403)
+
+    if key_id is None or not signature:
+        refuse("a signature from a registered approver key is required")
+    k = row(conn, "SELECT * FROM approver_keys WHERE id = :id", id=str(key_id))
+    if k is None or str(k["user_id"]) != str(actor_id):
+        refuse("key is not registered to the deciding user")
+    if k["revoked_at"] is not None:
+        refuse("key has been revoked")
+    if not signatures.verify(bytes(k["public_key"]), signature, message):
+        refuse("signature does not verify for this approval, decision and binding")
+    return {"key_id": str(key_id), "key_fingerprint": k["fingerprint"], "alg": k["alg"], "message": message}
 
 
 def _dispatch(deps: Deps, conn: Connection, a: dict, job: dict) -> bool:

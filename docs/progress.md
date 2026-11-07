@@ -98,3 +98,12 @@ as the source of truth.
   production refuses `redis://`, API TLS handshake). Full suites under TLS: Python 110 passed, Go all packages ok, OPA 21/21.
   Demo over HTTPS: 6 findings, audit chain ok.
 - Incomplete: Neo4j bolt TLS; API not pinned to TLS 1.3; no Vault-managed CA or rotation.
+
+### M3 — PO-04 per-approver signatures (2026-11-07)
+- Done: migration 0005 (`approver_keys`, signature columns on `approvals`); `asvas/signatures.py`; `/approver-keys` register/list/revoke;
+  decisions refused (403, audited, approval stays PENDING) without a valid signature from the deciding user's active key.
+- Dashboard signs with a non-extractable WebCrypto Ed25519 key stored in IndexedDB. Interop checked: Chromium 153 signature verified by
+  the server code; tampered message rejected.
+- Tested: `test_approver_signatures.py` 7 passed (recording, unsigned refused, cross-decision/binding/expiry replay refused, other user's
+  key refused, revoked key refused, signed rejection, key validation). Demo: unsigned approval -> 403, signed -> APPROVED, 6 findings.
+- Incomplete: WebAuthn (hardware-backed keys, attestation); executor-side signature verification.

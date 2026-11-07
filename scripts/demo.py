@@ -24,6 +24,24 @@ def call(method, path, token=None, body=None):
         return e.code, json.loads(e.read() or b"{}")
 
 
+_KEYS = {}
+
+
+def signed(token, x, decision="approve"):
+    """PO-04: sign the decision with an Ed25519 key registered for this approver (demo keeps it in memory only)."""
+    import base64
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    if token not in _KEYS:
+        sk = Ed25519PrivateKey.generate()
+        pub = base64.b64encode(sk.public_key().public_bytes_raw()).decode()
+        _KEYS[token] = (sk, call("POST", "/approver-keys", token, {"public_key": pub, "label": "demo"})[1]["id"])
+    sk, kid = _KEYS[token]
+    msg = f"asvas-approval-v1|{x['id']}|{decision}|{x['binding_hash']}|{x['expires_unix']}"
+    return {"decision": decision, "binding_hash": x["binding_hash"], "key_id": kid,
+            "signature": base64.b64encode(sk.sign(msg.encode())).decode()}
+
+
 def login(email):
     return call("POST", "/auth/dev-login", body={"email": email})[1]["access_token"]
 
@@ -59,10 +77,12 @@ def main():
     print("status:", a["status"], a["job_counts"])
     pending = [x for x in call("GET", "/approvals?status=PENDING", ap)[1] if x["assessment_id"] == aid]
     for x in pending:
+        print("unsigned approval by approver ->", call("POST", f"/approvals/{x['id']}/decision", ap,
+                                                       {"decision": "approve", "binding_hash": x["binding_hash"]})[0])
         print("self-approval by operator ->", call("POST", f"/approvals/{x['id']}/decision", op,
                                                   {"decision": "approve", "binding_hash": x["binding_hash"]})[0])
         print("approve", x["binding_summary"]["target"], "->",
-              call("POST", f"/approvals/{x['id']}/decision", ap, {"decision": "approve", "binding_hash": x["binding_hash"]})[1])
+              call("POST", f"/approvals/{x['id']}/decision", ap, signed(ap, x))[1])
     a = wait(op, aid, {"COMPLETED", "FAILED"})
     print("final:", a["status"], a["job_counts"], "provider:", a["provider_name"], "live AI:", a["provider_is_live_ai"])
     for f in call("GET", f"/assessments/{aid}/findings", op)[1]:

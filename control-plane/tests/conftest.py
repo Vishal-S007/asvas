@@ -104,7 +104,7 @@ def clean(migrated):
     with eng.begin() as c:
         c.execute(text("TRUNCATE tenants, users, assessments, plan_nodes, jobs, job_results, approvals, evidence, assets, "
                        "asset_relations, findings, finding_retests, audit_events, tenant_controls, "
-                       "checkpoints, checkpoint_blobs, checkpoint_writes, reports CASCADE"))
+                       "checkpoints, checkpoint_blobs, checkpoint_writes, reports, approver_keys CASCADE"))
     seed(eng)
     eng.dispose()
     r = get_redis()
@@ -133,7 +133,29 @@ def client(deps):
         u = lookup_user(email=email)
         return {"Authorization": f"Bearer {issue_token(u['id'], u['tenant_id'], u['role'])}"}
 
+    keys: dict[str, tuple] = {}
+
+    def signed(headers: dict, ap: dict, decision: str = "approve", **extra) -> dict:
+        """Decision body signed with an Ed25519 key registered (once) for the user behind `headers` (PO-04)."""
+        import base64
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+        from asvas.signatures import decision_message
+        tok = headers["Authorization"]
+        if tok not in keys:
+            sk = Ed25519PrivateKey.generate()
+            pub = base64.b64encode(sk.public_key().public_bytes_raw()).decode()
+            r = c.post("/api/v1/approver-keys", json={"public_key": pub, "label": "test"}, headers=headers)
+            assert r.status_code == 201, r.text
+            keys[tok] = (sk, r.json()["id"])
+        sk, kid = keys[tok]
+        msg = decision_message(ap["id"], decision, ap["binding_hash"], ap["expires_unix"])
+        return {"decision": decision, "binding_hash": ap["binding_hash"], "key_id": kid,
+                "signature": base64.b64encode(sk.sign(msg.encode())).decode(), **extra}
+
     c.as_user = as_user  # type: ignore[attr-defined]
+    c.signed = signed  # type: ignore[attr-defined]
     return c
 
 

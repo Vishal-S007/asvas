@@ -88,6 +88,6 @@ export interface Finding {
 export interface Approval {
   id: string; assessment_id: string; assessment_name: string; job_id: string; binding_hash: string; status: string;
   binding_summary: { tool_id: string; risk_tier: string; target: { scheme: string; host: string; port: number }; params: Record<string, unknown> };
-  expires_at: string; is_expired: boolean; created_at: string; decided_at: string | null; reason: string | null;
+  expires_at: string; expires_unix: number; is_expired: boolean; signer_key_id?: string | null; created_at: string; decided_at: string | null; reason: string | null;
 }
 export interface AuditEvent { id: number; actor: string; event_type: string; data: Record<string, unknown>; created_at: string; hash: string; assessment_id?: string | null }

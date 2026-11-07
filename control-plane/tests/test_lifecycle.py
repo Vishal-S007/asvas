@@ -139,10 +139,11 @@ def test_approval_flow_and_dual_control(client, make_assessment, deps):
     aid, op, job, ap = approval_setup(client, make_assessment, deps)
     assert client.get(f"/api/v1/assessments/{aid}", headers=op).json()["status"] == "AWAITING_APPROVAL"
     assert read_job_envelopes(deps.r) == []  # nothing dispatched before approval
-    body = {"decision": "approve", "binding_hash": ap["binding_hash"]}
     # operator who started the assessment is the requester -> cannot approve (also lacks role)
-    assert client.post(f"/api/v1/approvals/{ap['id']}/decision", json=body, headers=op).status_code == 403
+    assert client.post(f"/api/v1/approvals/{ap['id']}/decision",
+                       json={"decision": "approve", "binding_hash": ap["binding_hash"]}, headers=op).status_code == 403
     adm = client.as_user("admin@acme.test")
+    body = client.signed(adm, ap)
     r = client.post(f"/api/v1/approvals/{ap['id']}/decision", json=body, headers=adm)
     assert r.status_code == 200, r.text
     [env] = read_job_envelopes(deps.r)
@@ -208,8 +209,9 @@ def test_cancel_before_execution_and_control_message(client, make_assessment, de
     from asvas.orchestration import wire
     ctl = wire.parse(wire.pb.ControlMessage, wire.unb64(msgs[-1][1]["control_pb"]))
     assert ctl.type == wire.pb.CONTROL_TYPE_CANCEL_ASSESSMENT and ctl.assessment_id == aid
-    assert client.post(f"/api/v1/approvals/{ap['id']}/decision", json={"decision": "approve", "binding_hash": ap["binding_hash"]},
-                       headers=client.as_user("approver@acme.test")).status_code == 409
+    apr = client.as_user("approver@acme.test")
+    assert client.post(f"/api/v1/approvals/{ap['id']}/decision", json=client.signed(apr, ap),
+                       headers=apr).status_code == 409
 
 
 def test_cancel_with_running_job_waits_for_worker(client, make_assessment, deps):

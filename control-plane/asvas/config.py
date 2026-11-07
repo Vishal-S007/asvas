@@ -62,6 +62,8 @@ class Settings(BaseSettings):
 
     rate_limit_per_minute: int = 100  # spec p.86
     approval_ttl_minutes: int = 15
+    # PO-04: "required" -> every approval decision must carry the approver's Ed25519 signature.
+    approval_signatures: str = Field(default="required", pattern="^(required|optional)$")
     dispatch_grace_seconds: int = 20
     worker_stale_seconds: int = 15
 
@@ -75,6 +77,8 @@ class Settings(BaseSettings):
                     raise ValueError(f"ASVAS_{name.upper()} must be at least 32 characters")
             if self.allow_loopback_targets:
                 raise ValueError("loopback targets cannot be enabled in production")
+            if self.approval_signatures != "required":
+                raise ValueError("approver signatures cannot be disabled in production")
         return self
 
     def derived_key(self, purpose: str) -> bytes:

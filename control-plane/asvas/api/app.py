@@ -14,9 +14,10 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response, Streami
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from asvas import audit, execgrpc
+from asvas import audit, execgrpc, signatures
 from asvas.api.schemas import (
     ApprovalDecision,
+    ApproverKeyIn,
     AssessmentCreate,
     AssessmentUpdate,
     CancelRequest,
@@ -383,7 +384,10 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     def approvals(status: str | None = Query(None, pattern="^(PENDING|APPROVED|REJECTED|EXPIRED|INVALIDATED|CONSUMED)$"),
                   p: Principal = Depends(rate_limited)):
         with tenant_tx(p.tenant_id) as conn:
-            q = ("SELECT x.*, a.name AS assessment_name, (x.expires_at <= now()) AS is_expired FROM approvals x "
+            q = ("SELECT x.id, x.tenant_id, x.assessment_id, x.job_id, x.binding_hash, x.binding_summary, x.status, "
+                 "x.requested_by, x.decided_by, x.decided_at, x.expires_at, x.reason, x.created_at, x.signer_key_id, "
+                 "x.signed_message, floor(extract(epoch FROM x.expires_at))::bigint AS expires_unix, "
+                 "a.name AS assessment_name, (x.expires_at <= now()) AS is_expired FROM approvals x "
                  "JOIN assessments a ON a.id = x.assessment_id")
             if status:
                 return rows(conn, q + " WHERE x.status = :s ORDER BY x.created_at DESC LIMIT 200", s=status)
@@ -392,7 +396,43 @@ def create_app(deps: Deps | None = None) -> FastAPI:
     @api.post("/approvals/{apid}/decision")
     def decide(apid: uuid.UUID, body: ApprovalDecision, request: Request, p: Principal = Depends(role("approver"))):
         return engine.decide_approval(deps_of(request), p.tenant_id, apid, p.user_id, p.role, body.decision,
-                                      body.binding_hash, body.reason)
+                                      body.binding_hash, body.reason, body.key_id, body.signature)
+
+    @api.get("/approver-keys")
+    def my_keys(p: Principal = Depends(role("approver"))):
+        with tenant_tx(p.tenant_id) as conn:
+            return rows(conn, "SELECT id, alg, fingerprint, label, created_at, revoked_at FROM approver_keys "
+                              "WHERE user_id = :u ORDER BY created_at DESC", u=str(p.user_id))
+
+    @api.post("/approver-keys", status_code=201)
+    def register_key(body: ApproverKeyIn, p: Principal = Depends(role("approver"))):
+        try:
+            raw = signatures.parse_public_key(body.public_key)
+        except ValueError as e:
+            raise HTTPException(422, f"invalid Ed25519 public key: {e}") from e
+        fp = signatures.fingerprint(raw)
+        with tenant_tx(p.tenant_id) as conn:
+            if row(conn, "SELECT 1 AS x FROM approver_keys WHERE fingerprint = :f", f=fp):
+                raise HTTPException(409, "key already registered")
+            kid = conn.execute(text(
+                "INSERT INTO approver_keys (tenant_id, user_id, alg, public_key, fingerprint, label) "
+                "VALUES (:t, :u, 'Ed25519', :pk, :f, :l) RETURNING id"),
+                {"t": str(p.tenant_id), "u": str(p.user_id), "pk": raw, "f": fp, "l": body.label}).scalar()
+            audit.record(conn, p.tenant_id, f"user:{p.user_id}", "approver_key.registered",
+                         {"key_id": str(kid), "fingerprint": fp, "alg": "Ed25519", "label": body.label})
+        return {"id": str(kid), "fingerprint": fp, "alg": "Ed25519"}
+
+    @api.post("/approver-keys/{kid}/revoke")
+    def revoke_key(kid: uuid.UUID, p: Principal = Depends(role("approver"))):
+        with tenant_tx(p.tenant_id) as conn:
+            k = row(conn, "SELECT * FROM approver_keys WHERE id = :id", id=str(kid))
+            if k is None or (str(k["user_id"]) != str(p.user_id) and p.role != "admin"):
+                raise HTTPException(404, "key not found")
+            if k["revoked_at"] is None:
+                conn.execute(text("UPDATE approver_keys SET revoked_at = now() WHERE id = :id"), {"id": str(kid)})
+                audit.record(conn, p.tenant_id, f"user:{p.user_id}", "approver_key.revoked",
+                             {"key_id": str(kid), "fingerprint": k["fingerprint"]})
+        return {"id": str(kid), "revoked": True}
 
     # ------------------------------------------------------------------ findings / evidence
     @api.post("/findings/{fid}/retest", status_code=202)
