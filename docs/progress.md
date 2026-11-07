@@ -181,3 +181,8 @@ as the source of truth.
 - Done: `asvas/mcp_server.py`, `asvas mcp`. Dependency added: `mcp==2.3.0` (1.20 was incompatible with pydantic 2.14).
 - Tested: `test_mcp.py` 5 passed (read-only annotations, auth refused without/with bad token, tenant isolation, dry-run creates no
   jobs, stdio subprocess end to end).
+
+### DA-12 compliance reference mappings
+- Done: `asvas/compliance_map.py`, new `sso-mfa` control, mappings in `/compliance/controls`, CSV export, Controls page columns and
+  rule catalogue table. Tested: `test_compliance.py` 6 passed; Chromium check: 12 controls with mappings, disclaimer banner,
+  12 rules, CSV download works, no page errors. Not reviewed by an auditor.

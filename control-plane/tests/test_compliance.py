@@ -47,3 +47,33 @@ def test_policy_source_is_read_only_view(client):
     files = client.get("/api/v1/system/policy", headers=op).json()["files"]
     assert any(f["path"].endswith("decision.rego") and "package" in f["source"] for f in files)
     assert client.put("/api/v1/system/policy", json={}, headers=client.as_user("admin@acme.test")).status_code == 405
+
+
+def test_every_control_has_reference_mappings_and_disclaimer(client):
+    import re
+
+    from asvas.compliance_map import MAP
+    aud = client.as_user("auditor@acme.test")
+    d = client.get("/api/v1/compliance/controls", headers=aud).json()
+    assert "not an assessment" in d["mapping_disclaimer"] and "certification" in d["mapping_disclaimer"]
+    for c in d["controls"]:
+        m = c["mappings"]
+        assert c["id"] in MAP and m["nist_800_53"] and m["iso_27001"] and m["soc2"], c["id"]
+        assert all(re.fullmatch(r"[A-Z]{2}-\d+(\(\d+\))?", x) for x in m["nist_800_53"])
+        assert all(re.fullmatch(r"A\.[5-8]\.\d+", x) for x in m["iso_27001"])
+        assert all(re.fullmatch(r"(CC\d\.\d|C1\.\d)", x) for x in m["soc2"])
+        assert all(re.fullmatch(r"V\d+\.\d+", x) for x in m["owasp_asvs"])
+    assert set(MAP) == {c["id"] for c in d["controls"]}  # no stale mapping entries
+
+
+def test_csv_export_auditor_only_and_audited(client):
+    from asvas.db import rows, tenant_tx
+    from tests.test_lifecycle import tid_of
+    r = client.get("/api/v1/compliance/controls.csv", headers=client.as_user("auditor@acme.test"))
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
+    lines = r.text.splitlines()
+    assert lines[0].startswith("# Reference mapping only") and lines[1].startswith("control,requirement,status")
+    assert any(",AC-5," in x for x in lines) and any("A.8.24" in x for x in lines)
+    assert client.get("/api/v1/compliance/controls.csv", headers=client.as_user("operator@acme.test")).status_code == 403
+    with tenant_tx(tid_of()) as conn:
+        assert rows(conn, "SELECT 1 AS x FROM audit_events WHERE event_type = 'compliance.exported'")

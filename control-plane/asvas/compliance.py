@@ -57,6 +57,13 @@ def controls(conn: Connection, tenant_id, policy_health: dict) -> list[dict[str,
     keys = row(conn, "SELECT count(*) FILTER (WHERE revoked_at IS NULL) AS active, "
                      "count(*) FILTER (WHERE revoked_at IS NOT NULL) AS revoked FROM approver_keys")
     unsigned = decided["n"] - decided["signed"]
+    mfa = bool(s.oidc_issuer) and s.oidc_require_mfa
+    items.append(_item("sso-mfa", "CP-07", "Single sign-on with multi-factor authentication",
+                       "pass" if mfa and s.env != "development" else "attention",
+                       (f"OIDC issuer {s.oidc_issuer}; MFA (amr otp) {'required' if s.oidc_require_mfa else 'NOT required'}"
+                        if s.oidc_issuer else "OIDC not configured")
+                       + ("; development sign-in (no MFA) is also enabled" if s.env == "development" else ""),
+                       {"issuer": s.oidc_issuer, "mfa_required": s.oidc_require_mfa, "dev_login": s.env == "development"}))
     items.append(_item("approval-signatures", "PO-04", "Approver-signed decisions",
                        "pass" if s.approval_signatures == "required" and unsigned == 0 else "attention",
                        f"{decided['signed']}/{decided['n']} decisions signed; signatures {s.approval_signatures}; "
@@ -101,4 +108,7 @@ def controls(conn: Connection, tenant_id, policy_health: dict) -> list[dict[str,
     items.append(_item("isolation", "PO-10", "Execution isolation", "attention",
                        "Firecracker microVMs are not available on this host; executors use the development process "
                        "sandbox (separate UID, no_new_privs, rlimits, nftables egress) — not equivalent isolation"))
+    from asvas.compliance_map import for_control
+    for it in items:
+        it["mappings"] = for_control(it["id"])
     return items

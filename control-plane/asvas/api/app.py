@@ -520,9 +520,31 @@ def create_app(deps: Deps | None = None) -> FastAPI:
             raise HTTPException(403, f"requires role 'auditor' or 'admin' (you are '{p.role}')")
         from asvas import compliance
         health = deps_of(request).policy.health()
+        from asvas.compliance_map import DISCLAIMER, FRAMEWORKS
         with tenant_tx(p.tenant_id) as conn:
-            return {"generated_at": time.time(), "tenant_id": str(p.tenant_id),
-                    "controls": compliance.controls(conn, p.tenant_id, health)}
+            return {"generated_at": time.time(), "tenant_id": str(p.tenant_id), "frameworks": FRAMEWORKS,
+                    "mapping_disclaimer": DISCLAIMER, "controls": compliance.controls(conn, p.tenant_id, health)}
+
+    @api.get("/compliance/controls.csv")
+    def compliance_csv(request: Request, p: Principal = Depends(rate_limited)):
+        """DA-12 export: one row per (control, framework reference), with live status. Not a certification."""
+        if p.role not in ("auditor", "admin"):
+            raise HTTPException(403, f"requires role 'auditor' or 'admin' (you are '{p.role}')")
+        import csv
+        import io
+
+        from asvas import compliance
+        from asvas.compliance_map import DISCLAIMER, rows_for_export
+        with tenant_tx(p.tenant_id) as conn:
+            ctl = compliance.controls(conn, p.tenant_id, deps_of(request).policy.health())
+            audit.record(conn, p.tenant_id, p.actor, "compliance.exported", {"format": "csv"})
+        buf = io.StringIO()
+        buf.write(f"# {DISCLAIMER}\n")
+        w = csv.DictWriter(buf, fieldnames=["control", "requirement", "status", "framework", "framework_ref", "detail"])
+        w.writeheader()
+        w.writerows(rows_for_export(ctl))
+        return Response(buf.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": 'attachment; filename="asvas-controls.csv"'})
 
     @api.get("/system/policy")
     def policy_source(p: Principal = Depends(role("operator"))):
