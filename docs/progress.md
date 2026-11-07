@@ -197,3 +197,11 @@ as the source of truth.
   chains verify, new writes land in the current month partition. Dev DB restored from the signed DA-10 export: events 1-460
   recovered and cross-checked; events 461-583 (dev runs from 2026-11-07 after the export) are lost. No production data exists.
 - Tested: new tests in `test_planning_controls.py` and `test_retention.py`; Python suite 198 passed, 5 skipped (Qdrant not running).
+
+### PO-12 eBPF syscall monitor + PO-10 Firecracker backend
+- PO-12 done and running: `internal/ebpfmon` (real kernel tests: execve in watched cgroup -> SIGKILL, recorded; unwatched and benign
+  processes unaffected; 3 runs: 0.91 / 0.93 / 1.69 ms release-to-exit), integrated in the dev sandbox with startup self-test,
+  worker test `TestSyscallMonitorKillsDeniedSyscallInSandbox`. tracefs had to be mounted on this host (dev-up now does it as root).
+- PO-10 implemented, not verified: Firecracker backend, guest agent, tap egress, rootfs builder, host check/setup scripts,
+  `docs/firecracker-runbook.md`. Simulated-Firecracker tests pass (7); rootfs built (64 MiB ext4, agent as init, e2fsck clean);
+  `scripts/firecracker-host-check.sh` on this host: NOT READY (no /dev/kvm, no vmx/svm, no firecracker binaries).

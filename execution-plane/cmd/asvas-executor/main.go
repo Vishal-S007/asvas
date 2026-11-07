@@ -73,9 +73,11 @@ func run(log *slog.Logger) error {
 	var sb sandbox.Backend
 	switch env("ASVAS_EXECUTION_BACKEND", "devprocess") {
 	case "firecracker":
-		if _, err := sandbox.NewFirecracker(); err != nil {
+		fc, err := sandbox.NewFirecracker(sandbox.FirecrackerConfigFromEnv())
+		if err != nil {
 			return err
 		}
+		sb = fc
 	case "devprocess":
 		d, err := sandbox.NewDevProcess(slots)
 		if err != nil {

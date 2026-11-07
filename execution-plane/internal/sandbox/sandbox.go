@@ -5,7 +5,9 @@
 //     per-slot UID with no capabilities, no_new_privs, rlimits, empty environment, own process group
 //     (killed as a group), and kernel egress filtering by UID via nftables. It shares the host kernel.
 //     It is NOT equivalent to a Firecracker microVM and must not be described as such.
-//   - firecracker (REQUIRED BY SPEC, NOT IMPLEMENTED): needs a KVM-capable host; refuses to start.
+//   - firecracker (REQUIRED BY SPEC): one jailed Firecracker microVM per job (firecracker.go). Implemented and
+//     unit-tested against a simulated Firecracker API and guest; NOT yet run on a KVM host (none available
+//     during development). Refuses to start without /dev/kvm, the binaries, kernel and read-only rootfs.
 package sandbox
 
 import (
@@ -14,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/asvas/execution-plane/internal/ebpfmon"
 	"io"
 	"os"
 	"os/exec"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/asvas/execution-plane/internal/checks"
+	"github.com/asvas/execution-plane/internal/ebpfmon"
 	"github.com/asvas/execution-plane/internal/netguard"
 	"golang.org/x/sys/unix"
 )
@@ -40,17 +42,6 @@ type Info struct {
 type Backend interface {
 	Info() Info
 	Run(ctx context.Context, slot int, spec checks.Spec) (checks.Result, error)
-}
-
-// ---------------------------------------------------------------------------------- firecracker
-
-type Firecracker struct{}
-
-func NewFirecracker() (*Firecracker, error) {
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		return nil, fmt.Errorf("%w: /dev/kvm not present (Firecracker requires KVM)", ErrBackendUnavailable)
-	}
-	return nil, fmt.Errorf("%w: Firecracker backend is not implemented yet (requirement PO-10)", ErrBackendUnavailable)
 }
 
 // ---------------------------------------------------------------------------------- devprocess
