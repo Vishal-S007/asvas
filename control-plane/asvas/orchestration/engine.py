@@ -384,7 +384,7 @@ def _dispatch(deps: Deps, conn: Connection, a: dict, job: dict) -> bool:
     deadline = int(time.time()) + job["timeout_seconds"]
     frozen = json.loads(a["frozen_scope_doc"])
     envelope = {
-        "v": 1, "job_id": str(job["id"]), "attempt": attempt, "tenant_id": str(tenant_id), "assessment_id": str(a["id"]),
+        "job_id": str(job["id"]), "attempt": attempt, "tenant_id": str(tenant_id), "assessment_id": str(a["id"]),
         "tool_id": job["tool_id"], "risk_tier": spec.risk_tier, "category": spec.category,
         "target": job["target"], "params": job["params"], "max_requests": spec.max_requests,
         "requests_per_second": pol["max_requests_per_second"], "timeout_seconds": job["timeout_seconds"],
@@ -490,8 +490,8 @@ def _clear_short_term(deps: Deps, assessment_id) -> None:
 
 # --------------------------------------------------------------------------------------------- results
 
-def ingest_result(deps: Deps, body: str, sig: str) -> str:
-    res = bus.verify_result(body, sig)
+def ingest_result(deps: Deps, fields: dict[str, str]) -> str:
+    res = bus.verify_result(fields)
     if res is None:
         log.error("result with invalid signature dropped")
         return "bad_signature"

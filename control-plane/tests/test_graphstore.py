@@ -26,7 +26,7 @@ def neo(deps):
 def _run(client, make_assessment, deps):
     aid, op = start(client, make_assessment, deps, ports=(18080,))
     [job] = jobs_of(aid)
-    assert engine.ingest_result(deps, *result(job)) == "ok"
+    assert engine.ingest_result(deps, result(job)) == "ok"
     return aid, op
 
 

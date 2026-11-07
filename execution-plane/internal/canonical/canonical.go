@@ -148,6 +148,22 @@ func HMACVerify(key []byte, msg, sigHex string) bool {
 	return hmac.Equal(m.Sum(nil), want)
 }
 
+func HMACHexBytes(key, msg []byte) string {
+	m := hmac.New(sha256.New, key)
+	m.Write(msg)
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+func HMACVerifyBytes(key, msg []byte, sigHex string) bool {
+	want, err := hex.DecodeString(sigHex)
+	if err != nil {
+		return false
+	}
+	m := hmac.New(sha256.New, key)
+	m.Write(msg)
+	return hmac.Equal(m.Sum(nil), want)
+}
+
 // DerivedKey mirrors Settings.derived_key in the control plane: HMAC(master, purpose).
 func DerivedKey(master, purpose string) []byte {
 	m := hmac.New(sha256.New, []byte(master))

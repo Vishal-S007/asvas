@@ -36,17 +36,22 @@ def read_job_envelopes(r):
     out = []
     for _, msgs in r.xread({bus.JOBS: "0-0"}) or []:
         for _, f in msgs:
-            out.append(json.loads(f["envelope"]))
+            env = bus.decode_envelope(f)
+            assert env is not None, "job envelope signature did not verify"
+            out.append(env)
     return out
 
 
-def result(job, status="SUCCEEDED", exchanges=None, attempt=None, sig_ok=True):
-    body = json.dumps({"job_id": str(job["id"]), "attempt": attempt or job["attempt"], "tenant_id": str(job["tenant_id"]),
-                       "assessment_id": str(job["assessment_id"]), "worker_id": "pytest", "status": status,
-                       "backend": "simulated", "egress_mode": "n/a", "requests_used": 1,
-                       "exchanges": exchanges if exchanges is not None else [WEAK_EXCHANGE]})
-    key = get_settings().derived_key("result" if sig_ok else "wrong")
-    return body, hmac_hex(key, body)
+def result(job, status="SUCCEEDED", exchanges=None, attempt=None, sig_ok=True, **extra):
+    """Signed protobuf JobResult stream fields, as the Go executor would publish them."""
+    fields = bus.encode_result({"job_id": str(job["id"]), "attempt": attempt or job["attempt"],
+                                "tenant_id": str(job["tenant_id"]), "assessment_id": str(job["assessment_id"]),
+                                "worker_id": "pytest", "status": status, "backend": "simulated", "egress_mode": "n/a",
+                                "requests_used": 1, "exchanges": exchanges if exchanges is not None else [WEAK_EXCHANGE],
+                                **extra})
+    if not sig_ok:
+        fields["sig"] = hmac_hex(get_settings().derived_key("wrong"), fields["result_pb"])
+    return fields
 
 
 def start(client, make_assessment, deps, **kw):
@@ -63,7 +68,7 @@ def test_full_simulated_run_and_evidence_linkage(client, make_assessment, deps):
     assert job["status"] == "RUNNING" and job["attempt"] == 1
     env = read_job_envelopes(deps.r)[0]
     assert env["target"] == {"scheme": "http", "host": "127.0.0.1", "port": 18080} and env["approval"] is None
-    assert engine.ingest_result(deps, *result(job)) == "ok"
+    assert engine.ingest_result(deps, result(job)) == "ok"
     a = client.get(f"/api/v1/assessments/{aid}", headers=op).json()
     assert a["status"] == "COMPLETED" and a["provider_is_live_ai"] is False
     findings = client.get(f"/api/v1/assessments/{aid}/findings", headers=op).json()
@@ -88,15 +93,15 @@ def test_full_simulated_run_and_evidence_linkage(client, make_assessment, deps):
 def test_duplicate_stale_and_forged_results_ignored(client, make_assessment, deps):
     aid, _ = start(client, make_assessment, deps, ports=(18080,))
     [job] = jobs_of(aid)
-    assert engine.ingest_result(deps, *result(job, sig_ok=False)) == "bad_signature"
-    assert engine.ingest_result(deps, *result(job, attempt=2)) == "ignored"  # stale/foreign attempt
-    assert engine.ingest_result(deps, *result(job)) == "ok"
-    assert engine.ingest_result(deps, *result(job)) == "ignored"  # duplicate delivery
+    assert engine.ingest_result(deps, result(job, sig_ok=False)) == "bad_signature"
+    assert engine.ingest_result(deps, result(job, attempt=2)) == "ignored"  # stale/foreign attempt
+    assert engine.ingest_result(deps, result(job)) == "ok"
+    assert engine.ingest_result(deps, result(job)) == "ignored"  # duplicate delivery
     with tenant_tx(tid_of()) as conn:
         assert conn.execute(text("SELECT count(*) FROM job_results")).scalar() == 1
         n_findings = conn.execute(text("SELECT count(*) FROM findings")).scalar()
         assert conn.execute(text("SELECT count(*) FROM audit_events WHERE event_type='result.ignored_duplicate_or_stale'")).scalar() == 2
-    assert engine.ingest_result(deps, *result(job)) == "ignored"
+    assert engine.ingest_result(deps, result(job)) == "ignored"
     with tenant_tx(tid_of()) as conn:
         assert conn.execute(text("SELECT count(*) FROM findings")).scalar() == n_findings
 
@@ -104,10 +109,10 @@ def test_duplicate_stale_and_forged_results_ignored(client, make_assessment, dep
 def test_failure_retry_is_bounded(client, make_assessment, deps):
     aid, _ = start(client, make_assessment, deps, ports=(18080,), max_attempts=2)
     [job] = jobs_of(aid)
-    engine.ingest_result(deps, *result(job, status="FAILED", exchanges=[]))
+    engine.ingest_result(deps, result(job, status="FAILED", exchanges=[]))
     [job] = jobs_of(aid)
     assert job["status"] == "RUNNING" and job["attempt"] == 2  # re-dispatched once
-    engine.ingest_result(deps, *result(job, status="TIMED_OUT", exchanges=[]))
+    engine.ingest_result(deps, result(job, status="TIMED_OUT", exchanges=[]))
     [job] = jobs_of(aid)
     assert job["status"] == "TIMED_OUT" and job["attempt"] == 2  # no third attempt
 
@@ -200,7 +205,9 @@ def test_cancel_before_execution_and_control_message(client, make_assessment, de
     assert jobs_of(aid)[0]["status"] == "CANCELLED"
     assert deps.r.get(bus.halt_key_assessment(aid)) == "cancelled"
     msgs = deps.r.xrange(bus.CONTROL)
-    assert json.loads(msgs[-1][1]["message"])["type"] == "cancel_assessment"
+    from asvas.orchestration import wire
+    ctl = wire.parse(wire.pb.ControlMessage, wire.unb64(msgs[-1][1]["control_pb"]))
+    assert ctl.type == wire.pb.CONTROL_TYPE_CANCEL_ASSESSMENT and ctl.assessment_id == aid
     assert client.post(f"/api/v1/approvals/{ap['id']}/decision", json={"decision": "approve", "binding_hash": ap["binding_hash"]},
                        headers=client.as_user("approver@acme.test")).status_code == 409
 
@@ -209,7 +216,7 @@ def test_cancel_with_running_job_waits_for_worker(client, make_assessment, deps)
     aid, op = start(client, make_assessment, deps, ports=(18080,))
     [job] = jobs_of(aid)
     assert client.post(f"/api/v1/assessments/{aid}/cancel", json={"reason": "stop now"}, headers=op).json()["status"] == "CANCELLING"
-    engine.ingest_result(deps, *result(job, status="CANCELLED", exchanges=[]))
+    engine.ingest_result(deps, result(job, status="CANCELLED", exchanges=[]))
     assert client.get(f"/api/v1/assessments/{aid}", headers=op).json()["status"] == "CANCELLED"
 
 
@@ -280,9 +287,9 @@ def test_orchestrator_loop_processes_streams(client, make_assessment, deps):
         client.post(f"/api/v1/assessments/{a['id']}/start", headers=op)
         wait_status(client, op, a["id"], {"RUNNING"})
         [job] = jobs_of(a["id"])
-        body, sig = result(job)
-        deps.r.xadd(bus.RESULTS, {"result": body, "sig": sig})
-        deps.r.xadd(bus.RESULTS, {"result": body, "sig": sig})  # duplicate delivery on the stream
+        fields = result(job)
+        deps.r.xadd(bus.RESULTS, fields)
+        deps.r.xadd(bus.RESULTS, fields)  # duplicate delivery on the stream
         wait_status(client, op, a["id"], {"COMPLETED"})
         time.sleep(0.5)
     assert not o.errors
@@ -326,12 +333,10 @@ def test_planning_checkpoints_are_durable(client, make_assessment, deps):
 def test_execution_plane_scope_denial_locks_assessment(client, make_assessment, deps):
     aid, op = start(client, make_assessment, deps, ports=(18080,))
     [job] = jobs_of(aid)
-    body = json.dumps({"job_id": str(job["id"]), "attempt": 1, "tenant_id": str(job["tenant_id"]),
-                       "assessment_id": aid, "worker_id": "pytest", "status": "DENIED",
-                       "error": "execution-plane policy denied: [10.9.9.9 is outside allowed_cidrs]",
-                       "policy_decision": {"allow": False, "deny_reasons": ["10.9.9.9 is outside allowed_cidrs"]},
-                       "exchanges": []})
-    assert engine.ingest_result(deps, body, hmac_hex(get_settings().derived_key("result"), body)) == "ok"
+    fields = result(job, status="DENIED", exchanges=[],
+                    error="execution-plane policy denied: [10.9.9.9 is outside allowed_cidrs]",
+                    policy_decision={"allow": False, "deny_reasons": ["10.9.9.9 is outside allowed_cidrs"]})
+    assert engine.ingest_result(deps, fields) == "ok"
     a = client.get(f"/api/v1/assessments/{aid}", headers=op).json()
     assert a["status"] == "FAILED" and "scope violation" in a["failure_reason"]
     assert deps.r.get(bus.halt_key_assessment(aid)) == "failed"

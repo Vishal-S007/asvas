@@ -11,7 +11,7 @@ from tests.test_lifecycle import jobs_of, result, start
 def test_pdf_report_rendered_by_worker(client, make_assessment, deps):
     aid, op = start(client, make_assessment, deps, ports=(18080,))
     [job] = jobs_of(aid)
-    engine.ingest_result(deps, *result(job))
+    engine.ingest_result(deps, result(job))
     r = client.post(f"/api/v1/assessments/{aid}/reports", headers=op)
     assert r.status_code == 202
     rid = r.json()["report_id"]

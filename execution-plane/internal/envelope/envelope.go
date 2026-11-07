@@ -1,4 +1,5 @@
-// Package envelope decodes and authenticates job envelopes produced by the control plane.
+// Package envelope decodes and authenticates job envelopes produced by the control plane
+// (protobuf asvas.execution.v1.JobEnvelope; see wire.go).
 //
 // Nothing in an envelope is trusted until the HMAC over the exact received bytes verifies.
 // Decoding is strict: unknown fields are rejected, and tool parameters are re-validated here,
@@ -91,22 +92,8 @@ func strictDecode(raw []byte, v any) error {
 	return nil
 }
 
-// Open verifies the HMAC over the raw body and strictly decodes it.
-func Open(body, sig string, envelopeKey []byte) (*Envelope, error) {
-	if !canonical.HMACVerify(envelopeKey, body, sig) {
-		return nil, ErrBadSignature
-	}
-	var e Envelope
-	if err := strictDecode([]byte(body), &e); err != nil {
-		return nil, fmt.Errorf("envelope decode: %w", err)
-	}
-	return &e, e.validate()
-}
-
 func (e *Envelope) validate() error {
 	switch {
-	case e.V != 1:
-		return errors.New("unsupported envelope version")
 	case !uuidRE.MatchString(e.JobID) || !uuidRE.MatchString(e.TenantID) || !uuidRE.MatchString(e.AssessmentID):
 		return errors.New("malformed identifiers")
 	case e.Attempt < 1 || e.Attempt > 3:

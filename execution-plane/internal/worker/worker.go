@@ -4,6 +4,7 @@ package worker
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	pb "github.com/asvas/execution-plane/gen/asvasrpc/execution/v1"
 	"github.com/asvas/execution-plane/internal/canonical"
 	"github.com/asvas/execution-plane/internal/checks"
 	"github.com/asvas/execution-plane/internal/envelope"
@@ -21,6 +23,7 @@ import (
 	"github.com/asvas/execution-plane/internal/policy"
 	"github.com/asvas/execution-plane/internal/sandbox"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -146,9 +149,14 @@ func (w *Worker) dispatch(ctx context.Context, wg *sync.WaitGroup, m redis.XMess
 }
 
 func (w *Worker) handle(ctx context.Context, slot int, m redis.XMessage) {
-	body, _ := m.Values["envelope"].(string)
+	b64, _ := m.Values["envelope_pb"].(string)
 	sig, _ := m.Values["sig"].(string)
-	env, err := envelope.Open(body, sig, w.keys.env)
+	data, derr := base64.StdEncoding.DecodeString(b64)
+	if derr != nil {
+		w.log.Warn("rejected envelope: not base64", "stream_id", m.ID)
+		return
+	}
+	env, err := envelope.OpenPB(data, sig, w.keys.env)
 	if err != nil {
 		// Unauthenticated or malformed: nothing about it can be trusted, including its job id. Drop + log.
 		w.log.Warn("rejected envelope", "stream_id", m.ID, "err", err)
@@ -341,13 +349,46 @@ func (w *Worker) policyInput(env *envelope.Envelope, resolved []any, approval ma
 }
 
 func (w *Worker) publish(ctx context.Context, r Result) {
-	b, _ := json.Marshal(r)
-	body := string(b)
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(ResultToPB(r))
+	if err != nil {
+		w.log.Error("encode result", "err", err, "job", r.JobID)
+		return
+	}
 	if err := w.rdb.XAdd(context.Background(), &redis.XAddArgs{Stream: Results, MaxLen: 100000, Approx: true,
-		Values: map[string]any{"result": body, "sig": canonical.HMACHex(w.keys.res, body)}}).Err(); err != nil {
+		Values: map[string]any{"result_pb": base64.StdEncoding.EncodeToString(data),
+			"sig": canonical.HMACHexBytes(w.keys.res, data)}}).Err(); err != nil {
 		w.log.Error("publish result", "err", err, "job", r.JobID)
 	}
 	w.log.Info("job finished", "job", r.JobID, "attempt", r.Attempt, "status", r.Status, "error", r.Error)
+}
+
+// ApplyControl authenticates a serialized ControlMessage and kills matching running jobs.
+// It is used by both the control stream and the gRPC Control RPC.
+func (w *Worker) ApplyControl(data []byte, sig string) (int, error) {
+	if !canonical.HMACVerifyBytes(w.keys.ctl, data, sig) {
+		return 0, errors.New("control message signature invalid")
+	}
+	var msg pb.ControlMessage
+	if err := proto.Unmarshal(data, &msg); err != nil {
+		return 0, fmt.Errorf("control decode: %w", err)
+	}
+	if envelope.HasUnknownFields(msg.ProtoReflect()) {
+		return 0, errors.New("control message carries unknown fields")
+	}
+	switch msg.GetType() {
+	case pb.ControlType_CONTROL_TYPE_CANCEL_ASSESSMENT:
+		if msg.GetAssessmentId() == "" {
+			return 0, errors.New("cancel without assessment id")
+		}
+		n := w.KillMatching(msg.GetTenantId(), msg.GetAssessmentId(), "assessment cancelled: "+msg.GetReason())
+		w.log.Warn("cancel_assessment", "assessment", msg.GetAssessmentId(), "killed", n)
+		return n, nil
+	case pb.ControlType_CONTROL_TYPE_EMERGENCY_STOP:
+		n := w.KillMatching(msg.GetTenantId(), "", "emergency stop: "+msg.GetReason())
+		w.log.Warn("EMERGENCY STOP", "tenant", msg.GetTenantId(), "killed", n)
+		return n, nil
+	}
+	return 0, errors.New("unknown control type")
 }
 
 // KillMatching cancels running jobs for an assessment or a whole tenant. Returns how many were signalled.
@@ -374,25 +415,14 @@ func (w *Worker) controlLoop(ctx context.Context) {
 		for _, s := range res {
 			for _, m := range s.Messages {
 				last = m.ID
-				body, _ := m.Values["message"].(string)
+				b64, _ := m.Values["control_pb"].(string)
 				sig, _ := m.Values["sig"].(string)
-				if !canonical.HMACVerify(w.keys.ctl, body, sig) {
-					w.log.Warn("control message with bad signature ignored")
-					continue
+				data, err := base64.StdEncoding.DecodeString(b64)
+				if err == nil {
+					_, err = w.ApplyControl(data, sig)
 				}
-				var msg struct {
-					Type, TenantID, AssessmentID, Reason string
-				}
-				var raw map[string]string
-				_ = json.Unmarshal([]byte(body), &raw)
-				msg.Type, msg.TenantID, msg.AssessmentID, msg.Reason = raw["type"], raw["tenant_id"], raw["assessment_id"], raw["reason"]
-				switch msg.Type {
-				case "cancel_assessment":
-					n := w.KillMatching(msg.TenantID, msg.AssessmentID, "assessment cancelled: "+msg.Reason)
-					w.log.Warn("cancel_assessment", "assessment", msg.AssessmentID, "killed", n)
-				case "emergency_stop":
-					n := w.KillMatching(msg.TenantID, "", "emergency stop: "+msg.Reason)
-					w.log.Warn("EMERGENCY STOP", "tenant", msg.TenantID, "killed", n)
+				if err != nil {
+					w.log.Warn("control message ignored", "err", err)
 				}
 			}
 		}

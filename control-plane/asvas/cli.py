@@ -94,7 +94,7 @@ def handle(deps, stream: str, fields: dict) -> None:
     from asvas.orchestration import bus, engine
 
     if stream == bus.RESULTS:
-        engine.ingest_result(deps, fields["result"], fields["sig"])
+        engine.ingest_result(deps, fields)
     elif stream == bus.ORCH:
         msg = json.loads(fields["message"])
         if msg["type"] == "plan":

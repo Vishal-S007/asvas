@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import functools
+import hashlib
+import hmac
 import json
+import time
 from typing import Any
 
 import redis
 
-from asvas.canonical import canonical_json, hmac_hex, hmac_verify
+from asvas.canonical import canonical_json, hmac_hex
 from asvas.config import get_settings
+from asvas.orchestration import wire
 
 JOBS = "asvas:jobs"
 RESULTS = "asvas:results"
@@ -42,26 +46,56 @@ def ensure_groups(r: redis.Redis) -> None:
                 raise
 
 
-def sign_envelope(envelope: dict[str, Any]) -> tuple[str, str]:
-    body = canonical_json(envelope)
-    return body, hmac_hex(get_settings().derived_key("envelope"), body)
+def _mac(purpose: str, data: bytes) -> str:
+    return hmac.new(get_settings().derived_key(purpose), data, hashlib.sha256).hexdigest()
 
 
-def verify_result(body: str, sig: str) -> dict[str, Any] | None:
-    if not hmac_verify(get_settings().derived_key("result"), body, sig):
+def _mac_ok(purpose: str, data: bytes, sig: str) -> bool:
+    return hmac.compare_digest(_mac(purpose, data), sig or "")
+
+
+def encode_envelope(envelope: dict[str, Any]) -> dict[str, str]:
+    """Stream fields for one job: base64 protobuf JobEnvelope + HMAC over the serialized bytes."""
+    data = wire.envelope_to_pb(envelope).SerializeToString(deterministic=True)
+    return {"envelope_pb": wire.b64(data), "sig": _mac("envelope", data)}
+
+
+def decode_envelope(fields: dict[str, str]) -> dict[str, Any] | None:
+    data = wire.unb64(fields.get("envelope_pb", ""))
+    if not _mac_ok("envelope", data, fields.get("sig", "")):
         return None
-    return json.loads(body)
+    return wire.envelope_from_pb(wire.parse(wire.pb.JobEnvelope, data))
+
+
+def encode_result(result: dict[str, Any]) -> dict[str, str]:
+    data = wire.result_to_pb(result).SerializeToString(deterministic=True)
+    return {"result_pb": wire.b64(data), "sig": _mac("result", data)}
+
+
+def verify_result(fields: dict[str, str]) -> dict[str, Any] | None:
+    """Authenticate and decode a JobResult. None if the signature is wrong or the payload is malformed."""
+    try:
+        data = wire.unb64(fields.get("result_pb", ""))
+        if not _mac_ok("result", data, fields.get("sig", "")):
+            return None
+        return wire.result_from_pb(wire.parse(wire.pb.JobResult, data))
+    except wire.WireError:
+        return None
 
 
 def publish_job(r: redis.Redis, envelope: dict[str, Any]) -> str:
-    body, sig = sign_envelope(envelope)
-    return r.xadd(JOBS, {"envelope": body, "sig": sig}, maxlen=100000, approximate=True)
+    return r.xadd(JOBS, encode_envelope(envelope), maxlen=100000, approximate=True)
 
 
-def publish_control(r: redis.Redis, message: dict[str, Any]) -> None:
-    body = canonical_json(message)
-    r.xadd(CONTROL, {"message": body, "sig": hmac_hex(get_settings().derived_key("control"), body)},
-           maxlen=10000, approximate=True)
+def signed_control(message: dict[str, Any]) -> tuple[bytes, str]:
+    data = wire.control_to_pb({**message, "issued_unix": int(time.time())}).SerializeToString(deterministic=True)
+    return data, _mac("control", data)
+
+
+def publish_control(r: redis.Redis, message: dict[str, Any]) -> tuple[bytes, str]:
+    data, sig = signed_control(message)
+    r.xadd(CONTROL, {"control_pb": wire.b64(data), "sig": sig}, maxlen=10000, approximate=True)
+    return data, sig
 
 
 def publish_orchestrator(r: redis.Redis, message: dict[str, Any]) -> None:

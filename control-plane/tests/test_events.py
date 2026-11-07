@@ -18,7 +18,7 @@ def parse(text):
 def test_event_stream_replays_and_ends(client, make_assessment, deps):
     aid, op = start(client, make_assessment, deps, ports=(18080,))
     [job] = jobs_of(aid)
-    engine.ingest_result(deps, *result(job))
+    engine.ingest_result(deps, result(job))
     r = client.get(f"/api/v1/assessments/{aid}/events?max_seconds=20", headers=op)
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/event-stream")
     evs = parse(r.text)

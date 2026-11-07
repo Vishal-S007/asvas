@@ -1,0 +1,259 @@
+// ASVAS control-plane <-> execution-plane contract (requirement PO-06; spec pp. 6, 27, 31).
+//
+// Jobs, results and control messages travel over Redis Streams as serialized protobuf; each payload is
+// authenticated with HMAC-SHA256 over the exact serialized bytes. The ExecutorService is served by every
+// executor over mutual TLS for live status and out-of-band cancellation.
+//
+// Compatibility rules: never renumber or reuse field numbers; receivers reject messages carrying unknown
+// fields (a newer sender must not be able to smuggle semantics an older receiver would silently ignore).
+syntax = "proto3";
+
+package asvas.execution.v1;
+
+option go_package = "github.com/asvas/execution-plane/gen/asvasrpc/execution/v1;executionv1";
+
+// ---------------------------------------------------------------- job envelope (control -> execution)
+
+message Target {
+  string scheme = 1; // "http" | "https"
+  string host = 2;
+  int32 port = 3;
+}
+
+message SecurityHeadersParams {
+  string path = 1;
+  string method = 2; // "GET" | "HEAD"
+  int32 max_redirects = 3; // 0..3
+}
+
+message AllowedMethodsParams {
+  string path = 1;
+}
+
+message TLSParams {
+  int32 expiry_warning_days = 1; // 1..365
+}
+
+message ScopeTarget {
+  string host = 1;
+  repeated int32 ports = 2;
+  repeated string schemes = 3;
+}
+
+message Authorization {
+  string statement = 1;
+  string reference = 2;
+  string authorized_by = 3;
+  string valid_from = 4; // RFC 3339
+  string valid_until = 5; // RFC 3339
+}
+
+// The scope frozen and signed when the assessment started.
+message Scope {
+  repeated ScopeTarget targets = 1;
+  repeated string allowed_cidrs = 2;
+  repeated string excluded_cidrs = 3;
+  Authorization authorization = 4;
+}
+
+message TestingPolicy {
+  repeated string allowed_tools = 1;
+  repeated string approval_required_risk_tiers = 2;
+  int32 max_requests_per_second = 3;
+  int32 max_total_requests = 4;
+  int32 max_concurrency = 5;
+  int32 job_timeout_seconds = 6;
+  int32 max_wall_clock_minutes = 7;
+  int32 max_tokens = 8;
+  int32 max_planning_rounds = 9;
+  int32 max_plan_depth = 10;
+  int32 max_jobs = 11;
+  int32 max_attempts = 12;
+  bool require_kernel_egress = 13;
+}
+
+message Approval {
+  string approval_id = 1;
+  string binding_hash = 2; // sha256 of canonical {assessment_id, job_id, tool_id, target, params}
+  int64 expires_unix = 3;
+  string token = 4; // HMAC over canonical {approval_id, binding_hash, expires_unix}
+}
+
+message JobEnvelope {
+  uint32 version = 1; // currently 2
+  string job_id = 2;
+  int32 attempt = 3;
+  string tenant_id = 4;
+  string assessment_id = 5;
+  string tool_id = 6;
+  string risk_tier = 7;
+  string category = 8;
+  Target target = 9;
+  // Exactly one, and it must match tool_id. There is no free-form parameter field.
+  oneof params {
+    SecurityHeadersParams security_headers = 10;
+    AllowedMethodsParams allowed_methods = 11;
+    TLSParams tls = 12;
+  }
+  int32 max_requests = 13;
+  int32 requests_per_second = 14;
+  int32 timeout_seconds = 15;
+  int64 deadline_unix = 16;
+  int64 issued_unix = 17;
+  Scope scope = 18;
+  TestingPolicy policy = 19;
+  Approval approval = 20; // absent when no approval is required
+}
+
+// ---------------------------------------------------------------- result (execution -> control)
+
+enum JobStatus {
+  JOB_STATUS_UNSPECIFIED = 0;
+  JOB_STATUS_SUCCEEDED = 1;
+  JOB_STATUS_FAILED = 2;
+  JOB_STATUS_TIMED_OUT = 3;
+  JOB_STATUS_CANCELLED = 4;
+  JOB_STATUS_DENIED = 5;
+}
+
+message PolicyDecision {
+  bool allow = 1;
+  bool require_approval = 2;
+  bool approval_satisfied = 3;
+  repeated string deny_reasons = 4;
+  string error = 5;
+  string engine = 6;
+  string plane = 7;
+}
+
+message Header {
+  string name = 1;
+  string value = 2;
+}
+
+message Request {
+  string method = 1;
+  string url = 2;
+  string scheme = 3;
+  string host = 4;
+  int32 port = 5;
+  string path = 6;
+  string resolved_ip = 7;
+}
+
+message Response {
+  int32 status = 1;
+  repeated Header headers = 2;
+  string body_sha256 = 3;
+  int32 body_len = 4;
+  bool body_truncated = 5;
+  string body_excerpt = 6; // untrusted target content
+  string tls_version = 7;
+}
+
+message Redirect {
+  string location = 1;
+  string decision = 2; // "followed" | "blocked" | "not_followed"
+  string reason = 3;
+}
+
+message TLSInfo {
+  string probe = 1; // "default" | "legacy-only"
+  bool handshake = 2;
+  string version = 3;
+  string cipher_suite = 4;
+  string alpn = 5;
+  string verify_error = 6;
+  string hostname_error = 7;
+  string leaf_subject = 8;
+  string leaf_issuer = 9;
+  repeated string leaf_sans = 10;
+  string leaf_not_before = 11;
+  string leaf_not_after = 12;
+  string leaf_sha256 = 13;
+  bool self_signed = 14;
+  int32 days_until_expiry = 15;
+  int32 expiry_warning_days = 16;
+  int32 chain_length = 17;
+}
+
+message Exchange {
+  int32 seq = 1;
+  Request request = 2;
+  Response response = 3; // absent when no HTTP response was received
+  Redirect redirect = 4;
+  TLSInfo tls = 5;
+  optional string error = 6;
+  int64 started_unix_ms = 7;
+  int64 duration_ms = 8;
+}
+
+message JobResult {
+  string job_id = 1;
+  int32 attempt = 2;
+  string tenant_id = 3;
+  string assessment_id = 4;
+  string worker_id = 5;
+  JobStatus status = 6;
+  string error = 7;
+  PolicyDecision policy_decision = 8;
+  string backend = 9;
+  string egress_mode = 10;
+  int32 requests_used = 11;
+  repeated Exchange exchanges = 12;
+  map<string, string> sandbox_attestation = 13;
+  int64 started_unix = 14;
+  int64 finished_unix = 15;
+}
+
+// ---------------------------------------------------------------- control (control -> every executor)
+
+enum ControlType {
+  CONTROL_TYPE_UNSPECIFIED = 0;
+  CONTROL_TYPE_CANCEL_ASSESSMENT = 1;
+  CONTROL_TYPE_EMERGENCY_STOP = 2;
+}
+
+message ControlMessage {
+  ControlType type = 1;
+  string tenant_id = 2;
+  string assessment_id = 3; // empty for EMERGENCY_STOP (whole tenant)
+  string reason = 4;
+  int64 issued_unix = 5;
+}
+
+// ---------------------------------------------------------------- executor gRPC service (mutual TLS)
+
+message GetStatusRequest {}
+
+message WorkerStatus {
+  string worker_id = 1;
+  string backend = 2;
+  string isolation_level = 3;
+  string egress_mode = 4;
+  string note = 5;
+  int32 slots = 6;
+  int32 running_jobs = 7;
+  string policy_sha256 = 8;
+  string version = 9;
+  int32 uid = 10;
+  bool loopback_targets_allowed = 11;
+  int64 started_unix = 12;
+  int64 now_unix = 13;
+}
+
+message SignedControl {
+  bytes control_message = 1; // serialized ControlMessage
+  string sig = 2; // hex HMAC-SHA256 over control_message with the "control" key
+}
+
+message ControlAck {
+  int32 jobs_signalled = 1;
+}
+
+service ExecutorService {
+  // Live status straight from the executor (heartbeats in Redis remain the fleet-wide view).
+  rpc GetStatus(GetStatusRequest) returns (WorkerStatus);
+  // Out-of-band cancellation; the same signed message is also broadcast on the control stream.
+  rpc Control(SignedControl) returns (ControlAck);
+}

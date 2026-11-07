@@ -80,7 +80,7 @@ def test_complete_local_assessment_workflow(client, make_assessment, deps, execu
     att = results[0]["sandbox_attestation"]
     assert att["nonewprivs"] == "1"
     if os.geteuid() == 0:
-        assert att["uid"] >= 62000 and att["capeff"] == "0000000000000000"
+        assert int(att["uid"]) >= 62000 and att["capeff"] == "0000000000000000"
         assert results[0]["egress_mode"].startswith("nftables")
     assert client.get("/api/v1/audit/verify", headers=op).json()["ok"]
 

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,12 +17,16 @@ import (
 	"testing"
 	"time"
 
+	pb "github.com/asvas/execution-plane/gen/asvasrpc/execution/v1"
 	"github.com/asvas/execution-plane/internal/canonical"
 	"github.com/asvas/execution-plane/internal/envelope"
 	"github.com/asvas/execution-plane/internal/netguard"
 	"github.com/asvas/execution-plane/internal/policy"
 	"github.com/asvas/execution-plane/internal/sandbox"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/protowire"
+	"google.golang.org/protobuf/proto"
 )
 
 const master = "go-test-master-key"
@@ -130,17 +135,49 @@ func (f *fixture) envelope(mut func(map[string]any)) map[string]any {
 	return e
 }
 
-func sign(t *testing.T, e map[string]any) (string, string) {
-	b, err := json.Marshal(e)
+var paramField = map[string]string{"http.security_headers": "security_headers", "http.allowed_methods": "allowed_methods",
+	"tls.configuration": "tls"}
+
+// encode turns the test's map form of an envelope into the protobuf wire bytes the control plane sends.
+// Inputs that cannot be expressed in the typed contract (unknown fields, free-form params) fail here.
+func encode(e map[string]any) ([]byte, error) {
+	m := map[string]any{}
+	for k, v := range e {
+		m[k] = v
+	}
+	delete(m, "v")
+	m["version"] = envelope.WireVersion
+	field, ok := paramField[m["tool_id"].(string)]
+	if !ok {
+		field = "security_headers"
+	}
+	m[field] = m["params"]
+	delete(m, "params")
+	if m["approval"] == nil {
+		delete(m, "approval")
+	}
+	js, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	var msg pb.JobEnvelope
+	if err := protojson.Unmarshal(js, &msg); err != nil {
+		return nil, err
+	}
+	return proto.MarshalOptions{Deterministic: true}.Marshal(&msg)
+}
+
+func sign(t *testing.T, e map[string]any) ([]byte, string) {
+	data, err := encode(e)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return string(b), canonical.HMACHex(canonical.DerivedKey(master, "envelope"), string(b))
+	return data, canonical.HMACHexBytes(canonical.DerivedKey(master, "envelope"), data)
 }
 
 func (f *fixture) exec(t *testing.T, e map[string]any) Result {
-	body, sig := sign(t, e)
-	env, err := envelope.Open(body, sig, canonical.DerivedKey(master, "envelope"))
+	data, sig := sign(t, e)
+	env, err := envelope.OpenPB(data, sig, canonical.DerivedKey(master, "envelope"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,16 +282,26 @@ func TestInvalidEnvelopesRejected(t *testing.T) {
 	f := setup(t, nil)
 	defer f.close()
 	key := canonical.DerivedKey(master, "envelope")
-	body, sig := sign(t, f.envelope(nil))
-	if _, err := envelope.Open(body, strings.Repeat("0", 64), key); err == nil {
+	data, sig := sign(t, f.envelope(nil))
+	if _, err := envelope.OpenPB(data, strings.Repeat("0", 64), key); err == nil {
 		t.Fatal("bad signature accepted")
 	}
-	if _, err := envelope.Open(strings.Replace(body, `"path":"/"`, `"path":"/x"`, 1), sig, key); err == nil {
-		t.Fatal("modified body accepted")
+	tampered := append([]byte{}, data...)
+	tampered[len(tampered)-1] ^= 0x01
+	if _, err := envelope.OpenPB(tampered, sig, key); err == nil {
+		t.Fatal("modified bytes accepted")
+	}
+	// A correctly signed message carrying a field this build does not know must be rejected.
+	withUnknown := protowire.AppendTag(append([]byte{}, data...), 99, protowire.BytesType)
+	withUnknown = protowire.AppendString(withUnknown, "shell:id")
+	if _, err := envelope.OpenPB(withUnknown, canonical.HMACHexBytes(key, withUnknown), key); err == nil ||
+		!strings.Contains(err.Error(), "unknown fields") {
+		t.Fatalf("unknown field accepted: %v", err)
 	}
 	cases := map[string]func(map[string]any){
-		"unknown field": func(e map[string]any) { e["shell"] = "id" },
-		"unknown tool":  func(e map[string]any) { e["tool_id"] = "shell.exec" },
+		"unknown top-level field": func(e map[string]any) { e["shell"] = "id" },
+		"unknown tool":            func(e map[string]any) { e["tool_id"] = "shell.exec" },
+		"params for another tool": func(e map[string]any) { e["tool_id"] = "tls.configuration"; e["risk_tier"] = "low" },
 		"param injection": func(e map[string]any) {
 			e["params"] = map[string]any{"path": "/;id", "method": "GET", "max_redirects": 0}
 		},
@@ -267,8 +314,11 @@ func TestInvalidEnvelopesRejected(t *testing.T) {
 		"timeout > 300": func(e map[string]any) { e["timeout_seconds"] = 301 },
 	}
 	for name, mut := range cases {
-		b, s := sign(t, f.envelope(mut))
-		if _, err := envelope.Open(b, s, key); err == nil {
+		data, err := encode(f.envelope(mut))
+		if err != nil {
+			continue // not even expressible in the typed contract
+		}
+		if _, err := envelope.OpenPB(data, canonical.HMACHexBytes(key, data), key); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
@@ -342,8 +392,9 @@ func TestHaltedAndDuplicate(t *testing.T) {
 		t.Fatalf("halted assessment executed: %s", r.Status)
 	}
 	f.rdb.Del(ctx, "asvas:halt:assessment:33333333-3333-4333-8333-333333333333")
-	body, sig := sign(t, f.envelope(nil))
-	msg := redis.XMessage{ID: "1-1", Values: map[string]any{"envelope": body, "sig": sig}}
+	data, sig := sign(t, f.envelope(nil))
+	body := base64.StdEncoding.EncodeToString(data)
+	msg := redis.XMessage{ID: "1-1", Values: map[string]any{"envelope_pb": body, "sig": sig}}
 	f.w.handle(ctx, 1, msg)
 	f.w.handle(ctx, 1, msg)
 	if n := f.rdb.XLen(ctx, Results).Val(); n != 1 {
@@ -353,7 +404,7 @@ func TestHaltedAndDuplicate(t *testing.T) {
 		t.Fatalf("target hit %d times", f.hits.Load())
 	}
 	// Forged envelope: dropped without any result or traffic.
-	f.w.handle(ctx, 1, redis.XMessage{ID: "1-2", Values: map[string]any{"envelope": body, "sig": strings.Repeat("0", 64)}})
+	f.w.handle(ctx, 1, redis.XMessage{ID: "1-2", Values: map[string]any{"envelope_pb": body, "sig": strings.Repeat("0", 64)}})
 	if n := f.rdb.XLen(ctx, Results).Val(); n != 1 || f.hits.Load() != 1 {
 		t.Fatal("forged envelope had an effect")
 	}
