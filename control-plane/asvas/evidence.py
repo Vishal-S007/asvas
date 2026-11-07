@@ -18,6 +18,7 @@ from sqlalchemy import Connection, text
 
 from asvas import audit, crypto
 from asvas.canonical import canonical_json, sha256_hex
+from asvas.rules import check_hit_cwe
 from asvas.scoring import score
 
 MAX_EVIDENCE_BYTES = 256 * 1024
@@ -261,7 +262,7 @@ def evaluate_rules(tool_id: str, target: dict, exchanges: list[dict]) -> list[Ru
                                     f"Set-Cookie for '{name}' lacks: {', '.join(missing)} (value not stored in finding).",
                                     "low", "Cookie attribute weaknesses increase exposure if another flaw exists; "
                                     "cookie sensitivity not determined.", "high", "confirmed",
-                                    "CWE-1004" if "HttpOnly" in missing else "CWE-1275",
+                                    {"HttpOnly": "CWE-1004", "Secure": "CWE-614", "SameSite": "CWE-1275"}[missing[0]],
                                     "Set HttpOnly, Secure (on HTTPS) and SameSite=Lax/Strict on session cookies.",
                                     key=name, evidence_seq=seq))
         for hdr in ("server", "x-powered-by"):
@@ -311,7 +312,7 @@ def record_findings(conn: Connection, tenant_id, assessment_id, job: dict, asset
             {"t": str(tenant_id), "a": str(assessment_id), "asset": str(asset_id), "j": str(job["id"]),
              "check": job["tool_id"], "rule": hit.rule_id, "title": hit.title, "obs": hit.observed,
              "sev": hit.severity, "rat": hit.rationale, "conf": hit.confidence, "ver": hit.verification,
-             "cwe": hit.cwe, "rem": hit.remediation, "ev": "{" + ",".join(ev) + "}", "fp": fp,
+             "cwe": check_hit_cwe(hit.rule_id, hit.cwe), "rem": hit.remediation, "ev": "{" + ",".join(ev) + "}", "fp": fp,
              "cv": cv, "cs": cs, "csev": csev}).first()
         if fid.inserted:
             audit.record(conn, tenant_id, "system:evidence", "finding.created",

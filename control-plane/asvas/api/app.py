@@ -162,6 +162,12 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return {"user_id": str(p.user_id), "tenant_id": str(p.tenant_id), "email": p.email,
                 "display_name": p.display_name, "role": p.role}
 
+    @api.get("/rules")
+    def rule_catalog(_: Principal = Depends(rate_limited)):
+        """DA-09: every finding rule with its CWE, OWASP category and CVSS 4.0 vector (or why it is unscored)."""
+        from asvas.rules import catalog as rules_catalog
+        return rules_catalog()
+
     @api.get("/tools")
     def tools(_: Principal = Depends(rate_limited)):
         return catalog()

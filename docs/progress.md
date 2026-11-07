@@ -167,3 +167,7 @@ as the source of truth.
 ### PO-16 per-sandbox credentials
 - Done: `internal/sandbox/cred.go`; DevProcess issues/verifies per run. Tested: Go `cred_test.go` (3), worker test asserts verified
   credential, Python E2E asserts 4 distinct verified credential ids across 4 real sandbox runs. All Go packages ok; integration 10 passed.
+
+### DA-09 CWE/CVSS catalog
+- Done: `asvas/rules.py`, CWE enforcement in `record_findings`, `/rules`; fixed COOKIE-FLAGS mapping (Secure-only was CWE-1275,
+  now CWE-614). Tested: `test_rules.py` 16 passed; full suite passed (see counts below).
