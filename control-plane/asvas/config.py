@@ -40,12 +40,17 @@ class Settings(BaseSettings):
     # Local test environments: loopback targets are refused unless explicitly enabled.
     allow_loopback_targets: bool = False
     # Ports of the platform itself; never valid targets even on loopback.
-    protected_ports: list[int] = [5432, 6379, 8000, 8181, 5173, 7474, 7687, 6333]
+    protected_ports: list[int] = [5432, 6379, 8000, 8181, 5173, 7474, 7687, 6333, 7443]
 
     # Graph projection (Neo4j). Empty URI disables it; PostgreSQL stays the source of truth either way.
     neo4j_uri: str = ""
     neo4j_user: str = "neo4j"
     neo4j_password: SecretStr = SecretStr("")
+
+    # mTLS client material for the executors' gRPC ExecutorService (scripts/dev-certs.sh for development).
+    executor_tls_ca: str = ""
+    executor_tls_cert: str = ""
+    executor_tls_key: str = ""
 
     rate_limit_per_minute: int = 100  # spec p.86
     approval_ttl_minutes: int = 15

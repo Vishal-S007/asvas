@@ -188,3 +188,43 @@ def test_tls_configuration_check(client, make_assessment, deps, executor, target
     assert all(x["verification_status"] == "confirmed" for x in f.values())
     ev = client.get(f"/api/v1/evidence/{f['TLS-LEGACY']['evidence_ids'][0]}", headers=op).json()
     assert ev["content"]["tls"]["probe"] == "legacy-only" and ev["content"]["tls"]["version"] in ("TLS 1.0", "TLS 1.1")
+
+
+def test_executor_grpc_status_over_mtls(client, deps, executor):
+    from asvas import execgrpc
+    st = client.get("/api/v1/system/status", headers=client.as_user("viewer@acme.test")).json()
+    [w] = st["workers"]
+    assert w["grpc"]["reachable"] is True and w["grpc"]["mtls"] is True, w
+    # Without the control-plane client certificate the executor refuses the connection.
+    from asvas.config import get_settings
+    s = get_settings()
+    real = s.executor_tls_cert
+    s.executor_tls_cert = s.executor_tls_ca  # a certificate the executor will not accept as a client identity
+    try:
+        assert execgrpc.probe(w["grpc_addr"])["reachable"] is False
+    finally:
+        s.executor_tls_cert = real
+
+
+def test_cancellation_delivered_over_grpc_only(client, make_assessment, deps, executor, target_server, orchestrator):
+    """The Redis control stream is bypassed: only the mTLS gRPC Control RPC can stop the running sandbox."""
+    from asvas import execgrpc
+    from asvas.orchestration import bus
+    weak = target_server["weak"]
+    deps.provider_factory = Scripted(weak, ["/slow"])
+    aid, op = _start(client, make_assessment, ports=(weak,), job_timeout_seconds=30)
+    wait_status(client, op, aid, {"RUNNING"}, 30)
+    time.sleep(1.0)
+    data, sig = bus.signed_control({"type": "cancel_assessment", "tenant_id": str(tid_of()), "assessment_id": aid,
+                                    "reason": "grpc-only test"})
+    t0 = time.time()
+    res = execgrpc.broadcast_control(deps.r, data, sig)
+    assert res and res[0]["ok"] and res[0]["jobs_signalled"] == 1, res
+    end = time.time() + 15
+    while time.time() < end and jobs_of(aid)[0]["status"] == "RUNNING":
+        time.sleep(0.2)
+    job = jobs_of(aid)[0]
+    assert job["status"] == "CANCELLED" and "grpc-only test" in (job["error"] or "") and time.time() - t0 < 10
+    # A forged control message is refused by the executor even over the authenticated channel.
+    bad = execgrpc.broadcast_control(deps.r, data, "0" * 64)
+    assert bad and bad[0]["ok"] is False and bad[0]["detail"] == "INVALID_ARGUMENT"

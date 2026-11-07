@@ -59,6 +59,9 @@ jobs:
       - run: psql -h localhost -U postgres -f ../scripts/db-bootstrap.sql
       - run: uv sync --frozen
       - run: uv run ruff check asvas tests
+      - name: Generated protobuf code is up to date
+        working-directory: .
+        run: ./scripts/gen-proto.sh && git diff --exit-code -- control-plane/asvasrpc execution-plane/gen
       # Integration tests start the real Go executor (non-root here => degraded sandbox, reported as such).
       - run: uv run pytest -q
 

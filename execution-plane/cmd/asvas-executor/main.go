@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 
+	pb "github.com/asvas/execution-plane/gen/asvasrpc/execution/v1"
+	"github.com/asvas/execution-plane/internal/grpcserver"
 	"github.com/asvas/execution-plane/internal/netguard"
 	"github.com/asvas/execution-plane/internal/policy"
 	"github.com/asvas/execution-plane/internal/sandbox"
@@ -50,7 +52,7 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("loopback targets cannot be enabled in production")
 	}
 	var ports []int
-	for _, p := range strings.Split(env("ASVAS_PROTECTED_PORTS", "5432,6379,8000,8181,5173,7474,7687,6333"), ",") {
+	for _, p := range strings.Split(env("ASVAS_PROTECTED_PORTS", "5432,6379,8000,8181,5173,7474,7687,6333,7443"), ",") {
 		if n, err := strconv.Atoi(strings.TrimSpace(p)); err == nil {
 			ports = append(ports, n)
 		}
@@ -100,9 +102,31 @@ func run(log *slog.Logger) error {
 	}
 	rdb := redis.NewClient(opt)
 	host, _ := os.Hostname()
-	w := worker.New(worker.Config{WorkerID: fmt.Sprintf("%s-%d", host, os.Getpid()), Slots: slots, MasterKey: key,
-		Net: netguard.Config{AllowLoopback: allowLoop, ProtectedPorts: ports}, PolicySHA: pol.SHA256, Version: version},
-		rdb, pol, sb, log)
+	cfg := worker.Config{WorkerID: fmt.Sprintf("%s-%d", host, os.Getpid()), Slots: slots, MasterKey: key,
+		Net: netguard.Config{AllowLoopback: allowLoop, ProtectedPorts: ports}, PolicySHA: pol.SHA256, Version: version}
+	ca, crt, tkey := env("ASVAS_TLS_CA", ""), env("ASVAS_TLS_CERT", ""), env("ASVAS_TLS_KEY", "")
+	var w *worker.Worker
+	if ca != "" && crt != "" && tkey != "" {
+		tlsCfg, err := grpcserver.LoadTLSConfig(ca, crt, tkey)
+		if err != nil {
+			return fmt.Errorf("executor TLS: %w", err)
+		}
+		lazy := &lazyBackend{}
+		addr, err := grpcserver.Serve(ctx, env("ASVAS_GRPC_ADDR", "127.0.0.1:7443"), grpcserver.New(tlsCfg, lazy))
+		if err != nil {
+			return err
+		}
+		cfg.GRPCAddr = addr.String()
+		w = worker.New(cfg, rdb, pol, sb, log)
+		lazy.w = w
+		log.Info("ExecutorService listening (mutual TLS 1.3)", "addr", cfg.GRPCAddr)
+	} else {
+		if envName == "production" {
+			return fmt.Errorf("ASVAS_TLS_CA/CERT/KEY are required outside development")
+		}
+		log.Warn("ExecutorService disabled: no TLS material configured (development only)")
+		w = worker.New(cfg, rdb, pol, sb, log)
+	}
 	info := sb.Info()
 	log.Info("executor started", "backend", info.Backend, "isolation", info.IsolationLevel, "egress", info.EgressMode,
 		"policy_sha256", pol.SHA256, "slots", slots, "loopback_targets", allowLoop)
@@ -111,4 +135,21 @@ func run(log *slog.Logger) error {
 		return nil
 	}
 	return err
+}
+
+// lazyBackend lets the gRPC server start (and its address be advertised) before the worker exists.
+type lazyBackend struct{ w *worker.Worker }
+
+func (l *lazyBackend) Status() *pb.WorkerStatus {
+	if l.w == nil {
+		return &pb.WorkerStatus{}
+	}
+	return l.w.Status()
+}
+
+func (l *lazyBackend) ApplyControl(data []byte, sig string) (int, error) {
+	if l.w == nil {
+		return 0, fmt.Errorf("executor starting")
+	}
+	return l.w.ApplyControl(data, sig)
 }

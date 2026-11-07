@@ -76,13 +76,21 @@ PROPOSED → DENIED (policy) | AWAITING_APPROVAL → APPROVED → QUEUED → RUN
 QUEUED/RUNNING → CANCELLED ; FAILED/TIMED_OUT → QUEUED (bounded re-dispatch, attempt+1)
 ```
 
+## Wire contract (M3)
+
+All control <-> execution messages are protobuf (`proto/asvasrpc/execution/v1/execution.proto`, generated code in
+`control-plane/asvasrpc/` and `execution-plane/gen/`, regenerate with `scripts/gen-proto.sh`). Payloads are signed
+with HMAC-SHA256 over the exact serialized bytes; receivers reject unknown fields. Each executor also serves
+`ExecutorService` (GetStatus, Control) over gRPC with mutual TLS 1.3; the client certificate must carry the URI SAN
+`spiffe://asvas.local/control-plane`. Control messages sent over gRPC carry the same HMAC as the stream copy.
+
 ## Streams
 
 | Stream | Producer | Consumer group | Payload |
 |---|---|---|---|
-| `asvas:jobs` | orchestrator | `executors` | job envelope (id, attempt, tool, params, signed scope, approval token, deadline) |
-| `asvas:results` | executor | `orchestrator` | job result (status, evidence blobs, observations, error) |
-| `asvas:control` | API | executor (fan-out by `XREAD`) | `cancel_assessment`, `emergency_stop` |
+| `asvas:jobs` | orchestrator | `executors` | `envelope_pb` (base64 JobEnvelope) + `sig` |
+| `asvas:results` | executor | `orchestrator` | `result_pb` (base64 JobResult) + `sig` |
+| `asvas:control` | API | executor (fan-out by `XREAD`); also sent directly via gRPC | `control_pb` (ControlMessage) + `sig` |
 | `asvas:workers` (hash) | executor | API | heartbeat, backend, isolation level, egress mode |
 
 ## Directory layout

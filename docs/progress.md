@@ -1,5 +1,23 @@
 # Progress Log
 
+## 2026-11-07 — Milestone 3 (hardening without new infrastructure) — in progress
+
+### Completed
+- Protobuf contract `asvas.execution.v1` (PO-06): typed JobEnvelope with a params oneof per tool, JobResult,
+  ControlMessage; HMAC over serialized bytes; unknown fields rejected on both planes; generated code committed and
+  reproducible (`scripts/gen-proto.sh`, CI drift check). The JSON envelope path was removed (single format).
+- `ExecutorService` gRPC (GetStatus, Control) on every executor, mutual TLS 1.3 with SPIFFE-URI authorization
+  (CP-10 partial); dev PKI script; control plane probes executors over mTLS for `/system/status` and delivers
+  cancel/emergency-stop both on the signed stream and directly over gRPC; dashboard shows the channel state.
+
+### Verification (2026-11-07, this sandbox, root)
+- OPA 21/21; Go 21 tests pass (adds mTLS server tests); Python 99 pass (adds wire contract and gRPC E2E tests:
+  status over mTLS, cancellation delivered over gRPC only, forged control refused); dashboard tsc + build OK;
+  `scripts/demo.py` on the live stack (protobuf wire + mTLS) gives the 6 expected findings, audit chain intact.
+
+### Next
+OIDC sign-in (CP-07) needs a decision: which identity provider (e.g. Keycloak locally, Google, Microsoft Entra).
+
 ## 2026-10-31 — Milestone 2 (correlation & depth) — in progress
 
 ### Completed in M2 (each committed after its checks passed)

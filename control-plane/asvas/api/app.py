@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, Response, Streami
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from asvas import audit
+from asvas import audit, execgrpc
 from asvas.api.schemas import (
     ApprovalDecision,
     AssessmentCreate,
@@ -421,6 +421,8 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 w = json.loads(raw)
                 w["worker_id"] = wid
                 w["stale"] = now - w.get("heartbeat_unix", 0) > s.worker_stale_seconds
+                w["grpc"] = execgrpc.probe(w["grpc_addr"]) if w.get("grpc_addr") and not w["stale"] else \
+                    {"reachable": False, "detail": "executor did not advertise an mTLS endpoint"}
                 workers.append(w)
             redis_ok = True
         except Exception:  # noqa: BLE001

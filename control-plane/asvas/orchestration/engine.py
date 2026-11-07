@@ -210,6 +210,17 @@ def _run_planning_round(deps: Deps, tenant_id, assessment_id) -> None:
     advance(deps, tenant_id, assessment_id, from_planning=True)
 
 
+def _control(deps: Deps, tenant_id, message: dict) -> None:
+    """Broadcast a signed control message on the stream and, when configured, directly over mTLS gRPC."""
+    from asvas import execgrpc
+    data, sig = bus.publish_control(deps.r, message)
+    direct = execgrpc.broadcast_control(deps.r, data, sig)
+    if direct:
+        with _tx(deps, tenant_id) as conn:
+            audit.record(conn, tenant_id, "system:orchestrator", "control.direct_delivery",
+                         {"type": message["type"], "results": direct}, message.get("assessment_id"))
+
+
 def _fail(deps: Deps, tenant_id, assessment_id, reason: str) -> None:
     with _tx(deps, tenant_id) as conn:
         a = row(conn, "SELECT status FROM assessments WHERE id = :id FOR UPDATE", id=str(assessment_id))
@@ -222,7 +233,7 @@ def _fail(deps: Deps, tenant_id, assessment_id, reason: str) -> None:
                           "WHERE assessment_id = :a AND status IN ('PENDING','APPROVED')"), {"a": str(assessment_id)})
         transition_assessment(conn, tenant_id, assessment_id, "FAILED", "system:orchestrator", reason)
     deps.r.set(bus.halt_key_assessment(str(assessment_id)), "failed", ex=86400)
-    bus.publish_control(deps.r, {"type": "cancel_assessment", "tenant_id": str(tenant_id),
+    _control(deps, tenant_id, {"type": "cancel_assessment", "tenant_id": str(tenant_id),
                                  "assessment_id": str(assessment_id), "reason": "failed"})
 
 
@@ -664,7 +675,7 @@ def cancel_assessment(deps: Deps, tenant_id, assessment_id, actor: str, reason: 
         conn.execute(text("UPDATE approvals SET status='INVALIDATED', reason='assessment cancelled' "
                           "WHERE assessment_id = :a AND status IN ('PENDING','APPROVED')"), {"a": str(assessment_id)})
     deps.r.set(bus.halt_key_assessment(str(assessment_id)), "cancelled", ex=86400)
-    bus.publish_control(deps.r, {"type": "cancel_assessment", "tenant_id": str(tenant_id),
+    _control(deps, tenant_id, {"type": "cancel_assessment", "tenant_id": str(tenant_id),
                                  "assessment_id": str(assessment_id), "reason": reason})
     return advance(deps, tenant_id, assessment_id) or "CANCELLING"
 
@@ -679,7 +690,7 @@ def emergency_stop(deps: Deps, tenant_id, actor_id, reason: str) -> dict:
         active = [r["id"] for r in rows(conn, "SELECT id FROM assessments WHERE status IN "
                                               "('PLANNING','RUNNING','AWAITING_APPROVAL','REPORTING')")]
     deps.r.set(bus.halt_key_tenant(str(tenant_id)), "1")
-    bus.publish_control(deps.r, {"type": "emergency_stop", "tenant_id": str(tenant_id), "reason": reason})
+    _control(deps, tenant_id, {"type": "emergency_stop", "tenant_id": str(tenant_id), "reason": reason})
     for aid in active:
         try:
             cancel_assessment(deps, tenant_id, aid, f"user:{actor_id}", f"emergency stop: {reason}")

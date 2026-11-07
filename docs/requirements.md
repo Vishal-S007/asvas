@@ -41,7 +41,7 @@ Status legend:
 | CP-07 | OAuth2/JWT auth; enterprise SSO via OIDC; MFA | 32, 48-49, 86 | Partial | HS256 JWT with roles+tenant; dev login (disabled outside `ASVAS_ENV=development`). OIDC/MFA: Planned M3 (Needs IdP) |
 | CP-08 | Role-based access (RACI: admin/CISO, red-team lead approver, operator, viewer) | 40-42 | Done | `viewer`, `operator`, `approver`, `admin`; enforced per endpoint, tested |
 | CP-09 | No single user can bypass HITL / alter global parameters alone | 41 | Done | Approver ≠ requester enforced; emergency stop is admin-only and audited |
-| CP-10 | mTLS between control & execution planes; TLS 1.3 everywhere; Vault CA | 58, 66, 68 | Planned (M3) | M1 runs on localhost with Redis password; not claimed |
+| CP-10 | mTLS between control & execution planes; TLS 1.3 everywhere; Vault CA | 58, 66, 68 | Partial (M3) | Executor gRPC requires mutual TLS 1.3 + SPIFFE-URI client identity (dev CA via `scripts/dev-certs.sh`); Redis/Postgres/API still plain TCP on localhost; no Vault/automated rotation |
 | CP-11 | Envelope/AES-256 encryption at rest; KMS | 7, 15, 24, 85 | Planned (M3) | Not implemented. Evidence stored plaintext in Postgres in M1 (documented limitation) |
 
 ## 3. Planning & orchestration
@@ -71,7 +71,7 @@ Status legend:
 | PO-03 | Approval bound to assessment, action, params, expiry; no reuse after change | (user req.) 4, 32 | Done | Binding hash + HMAC approval token verified by executor; tested |
 | PO-04 | "Cryptographic" admin sign-off via web | 4, 32 | Partial | Server-side HMAC-signed approval token; per-user asymmetric signatures (WebAuthn) Planned M3 |
 | PO-05 | Tool Abstraction Layer: strongly typed schemas, `additionalProperties:false`, no shell | 2-3, 27-28, 74-76 | Done | Pydantic (control plane) + strict Go decoding (executor); no shell tool exists |
-| PO-06 | gRPC/Protobuf interface to workers | 6, 27, 31 | Planned (M3) | Signed, strictly-decoded JSON over Redis Streams; protobuf contract not yet defined |
+| PO-06 | gRPC/Protobuf interface to workers | 6, 27, 31 | Done (M3) | `proto/asvasrpc/execution/v1/execution.proto`: typed JobEnvelope (params oneof), JobResult, ControlMessage over Redis Streams with HMAC over serialized bytes and unknown-field rejection; `ExecutorService` (GetStatus, Control) served by each executor over gRPC |
 | PO-07 | Go execution proxy | 6, 23-24, 63, 75 | Done | `execution-plane/` (Go 1.26) |
 | PO-08 | Rate limit ≤1000 (policy), ≤500 pkt/s discovery | 3, 11 | Done | Executor request budget + per-job req/s cap; policy caps |
 | PO-09 | Tool timeout 300 s per call; validation < 30 s | 6, 14, 75 | Done | Per-tool timeout ≤ 30 s for HTTP checks, hard max 300 s |
@@ -164,3 +164,4 @@ Status legend:
 | Honest model failure | `test_planning.py::test_anthropic_provider_invalid_output_is_honest_error`, `test_anthropic_provider_timeout`; `test_lifecycle.py::test_provider_failure_is_reported_honestly`, `test_opa_unavailable_fails_closed` |
 | Durability / recovery | `test_lifecycle.py::test_planning_checkpoints_are_durable`, `test_lost_planning_request_is_recovered`, `test_concurrent_planning_is_locked` |
 | M2 additions | `test_graphstore.py` (projection, tenant isolation, failure tolerance), `test_integration.py::test_tls_configuration_check`, `checks/tls_test.go`, `test_reports.py`, `test_events.py`, `test_lifecycle.py::test_execution_plane_scope_denial_locks_assessment`, `worker_test.go::TestKernelEgressRequirementEnforced`, `test_planning.py::test_circuit_breaker_opens_and_recovers`, `test_fallback_is_labelled_not_ai` |
+| M3 additions | `tests/test_wire.py` (round trip, tamper, unknown fields, typed params), `worker_test.go::TestInvalidEnvelopesRejected` (signed unknown field, params/tool mismatch), `grpcserver/server_test.go` (no cert, foreign CA, wrong identity, TLS 1.2, unsigned control), `test_integration.py::test_executor_grpc_status_over_mtls`, `test_cancellation_delivered_over_grpc_only` |

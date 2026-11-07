@@ -1,11 +1,11 @@
-# ASVAS — Autonomous Security Validation Agent System (Milestones 1–2)
+# ASVAS — Autonomous Security Validation Agent System (Milestones 1–3, in progress)
 
 A security validation platform for **explicitly authorized** environments: it accepts an assessment scope and
 testing policy, creates a bounded plan, runs permitted non-destructive checks through controlled tool adapters,
 stores real evidence, derives evidence-backed findings, pauses for human approvals, supports retesting, and keeps
 a hash-chained audit trail.
 
-> **Status: development milestones 1–2. Not production-ready and not enterprise-ready.** See
+> **Status: development milestones 1–3. Not production-ready and not enterprise-ready.** See
 > [docs/requirements.md](docs/requirements.md) for what is implemented, partial, substituted, or planned, and
 > [Limitations](#limitations) below.
 
@@ -16,7 +16,8 @@ a hash-chained audit trail.
 | Management | `dashboard/` | React 19 + Vite + TypeScript |
 | Control (modular monolith) | `control-plane/asvas/` | Python ≥3.11, FastAPI, SQLAlchemy/Alembic, LangGraph (Postgres checkpoints) |
 | Policy | `policies/` | OPA/Rego v1 — evaluated by an OPA server *and* independently inside the executor |
-| Execution | `execution-plane/` | Go 1.26 executor, embedded OPA, pinned-IP HTTP checks, dev process sandbox + nftables |
+| Execution | `execution-plane/` | Go 1.26 executor, embedded OPA, pinned-IP HTTP/TLS checks, dev process sandbox + nftables, gRPC ExecutorService (mutual TLS 1.3) |
+| Contract | `proto/` | protobuf `asvas.execution.v1`; signed payloads over Redis Streams; `scripts/gen-proto.sh` |
 | State / events | — | PostgreSQL 16 (RLS, source of truth), Redis Streams, Neo4j 5.26 (graph projection) |
 | Reports | `asvas report-worker` | JSON / Markdown / PDF (separate rendering worker) |
 
@@ -33,8 +34,9 @@ Prerequisites: PostgreSQL 16, Redis ≥7, Neo4j 5.26 (optional; or `docker compo
 sudo -u postgres psql -f scripts/db-bootstrap.sql
 # 2. OPA binary (or install from openpolicyagent.org) into .tools/
 GOBIN=$PWD/.tools go install github.com/open-policy-agent/opa@v1.21.4
-# 3. config
+# 3. config + development mTLS certificates for the executor's gRPC channel
 cp .env.example .env            # dev placeholders; never commit .env
+./scripts/dev-certs.sh          # writes var/certs/ (git-ignored); dev-up.sh also does this if missing
 # 4. control plane deps
 (cd control-plane && uv sync --frozen)
 # 5. start OPA, API, orchestrator, executor and the local test target (logs in var/logs/)
@@ -50,8 +52,8 @@ Walkthrough: [docs/demo.md](docs/demo.md). Scripted version: `python3 scripts/de
 
 ```bash
 (cd policies && ../.tools/opa test -v .)                  # 21 Rego policy tests
-(cd execution-plane && sudo go test ./...)                # 19 executor tests: isolation, approvals, rebinding, TLS, cancel
-(cd control-plane && uv run pytest)                       # 93: unit, API, lifecycle, Neo4j, SSE, PDF, E2E with real executor
+(cd execution-plane && sudo go test ./...)                # 21 executor tests: isolation, approvals, rebinding, TLS, mTLS, cancel
+(cd control-plane && uv run pytest)                       # 99: unit, API, lifecycle, wire, Neo4j, SSE, PDF, E2E incl. gRPC/mTLS
 (cd dashboard && npm run typecheck && npm run build)
 ```
 
@@ -74,7 +76,7 @@ is stored as evidence and never changes scope, policy or tools. There is no shel
 - Three checks exist (`http.security_headers`, `http.allowed_methods`, `tls.configuration`). Absence of findings ≠ security.
 - Planner: the default `deterministic-test` provider is **not AI** and is labelled as such everywhere. The
   Anthropic provider is implemented and unit-tested with mocked HTTP only; it has not been run against a live API.
-- Not yet implemented: Qdrant, OIDC/MFA, mTLS, encryption at rest/KMS, gRPC contract, CVSS environmental/threat
+- Not yet implemented: Qdrant, OIDC/MFA, TLS for Redis/Postgres/API, encryption at rest/KMS, CVSS environmental/threat
   metrics, compliance mapping, WORM export, multi-stage path analysis, Kubernetes/Terraform. No performance/accuracy figures from
   the specification have been measured or are claimed.
 - Dev login exists only with `ASVAS_ENV=development`.

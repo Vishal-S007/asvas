@@ -43,6 +43,7 @@ type Config struct {
 	Resolver  netguard.Resolver
 	PolicySHA string
 	Version   string
+	GRPCAddr  string // advertised mTLS address of this executor's ExecutorService ("" = disabled)
 }
 
 type running struct {
@@ -362,6 +363,18 @@ func (w *Worker) publish(ctx context.Context, r Result) {
 	w.log.Info("job finished", "job", r.JobID, "attempt", r.Attempt, "status", r.Status, "error", r.Error)
 }
 
+// Status reports live executor state for the gRPC GetStatus RPC.
+func (w *Worker) Status() *pb.WorkerStatus {
+	info := w.sb.Info()
+	w.mu.Lock()
+	n := len(w.active)
+	w.mu.Unlock()
+	return &pb.WorkerStatus{WorkerId: w.cfg.WorkerID, Backend: info.Backend, IsolationLevel: info.IsolationLevel,
+		EgressMode: info.EgressMode, Note: info.Note, Slots: int32(w.cfg.Slots), RunningJobs: int32(n),
+		PolicySha256: w.cfg.PolicySHA, Version: w.cfg.Version, Uid: int32(os.Geteuid()),
+		LoopbackTargetsAllowed: w.cfg.Net.AllowLoopback, StartedUnix: w.started.Unix()}
+}
+
 // ApplyControl authenticates a serialized ControlMessage and kills matching running jobs.
 // It is used by both the control stream and the gRPC Control RPC.
 func (w *Worker) ApplyControl(data []byte, sig string) (int, error) {
@@ -441,7 +454,7 @@ func (w *Worker) heartbeat(ctx context.Context) {
 			"isolation_level": info.IsolationLevel, "egress_mode": info.EgressMode, "note": info.Note,
 			"slots": w.cfg.Slots, "running_jobs": n, "policy_sha256": w.cfg.PolicySHA, "version": w.cfg.Version,
 			"pid": os.Getpid(), "uid": os.Geteuid(), "started_unix": w.started.Unix(),
-			"loopback_targets_allowed": w.cfg.Net.AllowLoopback})
+			"loopback_targets_allowed": w.cfg.Net.AllowLoopback, "grpc_addr": w.cfg.GRPCAddr})
 		w.rdb.HSet(context.Background(), Workers, w.cfg.WorkerID, string(hb))
 		select {
 		case <-ctx.Done():

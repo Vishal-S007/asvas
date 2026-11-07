@@ -173,27 +173,43 @@ def executor_bin():
     return out
 
 
+@pytest.fixture(scope="session")
+def pki(tmp_path_factory):
+    """Development PKI for the executor's mTLS gRPC endpoint (scripts/dev-certs.sh)."""
+    d = tmp_path_factory.mktemp("pki")
+    subprocess.run([str(ROOT / "scripts" / "dev-certs.sh"), str(d)], check=True, capture_output=True)
+    return d
+
+
 @pytest.fixture()
-def executor(executor_bin, clean, target_server):
+def executor(executor_bin, clean, target_server, pki, monkeypatch, tmp_path):
+    from asvas.config import get_settings
     from asvas.orchestration.bus import WORKERS, get_redis
-    env = {"PATH": os.environ.get("PATH", ""), "ASVAS_ENV": "development",
+    s = get_settings()
+    monkeypatch.setattr(s, "executor_tls_ca", str(pki / "ca.crt"))
+    monkeypatch.setattr(s, "executor_tls_cert", str(pki / "control-plane.crt"))
+    monkeypatch.setattr(s, "executor_tls_key", str(pki / "control-plane.key"))
+    env = {"ASVAS_TLS_CA": str(pki / "ca.crt"), "ASVAS_TLS_CERT": str(pki / "executor.crt"),
+           "ASVAS_TLS_KEY": str(pki / "executor.key"), "ASVAS_GRPC_ADDR": "127.0.0.1:0","PATH": os.environ.get("PATH", ""), "ASVAS_ENV": "development",
            "ASVAS_SIGNING_KEY": os.environ["ASVAS_SIGNING_KEY"], "ASVAS_REDIS_URL": os.environ["ASVAS_REDIS_URL"],
            "ASVAS_POLICY_DIR": str(ROOT / "policies"), "ASVAS_ALLOW_LOOPBACK_TARGETS": "true",
            "ASVAS_EXECUTOR_SLOTS": "3", "ASVAS_SANDBOX_BASE_UID": "62000"}
-    p = subprocess.Popen([str(executor_bin)], env=env, stderr=subprocess.PIPE, text=True)
+    log = open(tmp_path / "executor.log", "w")  # noqa: SIM115 - closed at teardown
+    p = subprocess.Popen([str(executor_bin)], env=env, stderr=log, stdout=log, text=True)
     r = get_redis()
     end = time.time() + 20
     while time.time() < end and not r.hlen(WORKERS):
         time.sleep(0.1)
     if not r.hlen(WORKERS):
         p.kill()
-        raise RuntimeError("executor did not register: " + (p.stderr.read() if p.stderr else ""))
+        raise RuntimeError("executor did not register: " + (tmp_path / "executor.log").read_text())
     yield p
     p.terminate()
     try:
         p.wait(5)
     except subprocess.TimeoutExpired:
         p.kill()
+    log.close()
 
 
 class Orchestrator:
