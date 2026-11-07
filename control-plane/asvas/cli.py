@@ -81,6 +81,8 @@ def run_orchestrator(stop_after: float | None = None) -> None:
                 log.exception("handler failed for %s %s", stream, mid)
             r.xack(stream, bus.ORCH_GROUP, mid)
         if time.time() - last_reap > 5:
+            from asvas import retention
+            retention.maybe_run_daily(r)
             try:
                 n = engine.reap(deps)
                 if n:
@@ -123,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     av.add_argument("--public-key", required=True, help="base64 Ed25519 ledger public key")
     av.add_argument("--db", action="store_true")
     sub.add_parser("audit-public-key", help="print the ledger public key (distribute out of band)")
+    sub.add_parser("retention", help="run the retention/partition maintenance task now (normally daily, automatic)")
     a = p.parse_args(argv)
     if a.cmd == "migrate":
         migrate()
@@ -168,6 +171,10 @@ def main(argv: list[str] | None = None) -> int:
             res = (ax_.cross_check if a.db else ax_.verify)(a.export_dir, a.public_key)
             print(json.dumps(res, indent=2))
             return 0 if res["ok"] else 1
+    elif a.cmd == "retention":
+        from asvas import retention
+        from asvas.orchestration.bus import get_redis
+        print(json.dumps(retention.run(get_redis()), indent=2, default=str))
     elif a.cmd == "graph-resync":
         from asvas.db import list_tenant_ids, rows, tenant_tx
         from asvas.orchestration.engine import Deps, sync_graph

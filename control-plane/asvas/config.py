@@ -64,6 +64,8 @@ class Settings(BaseSettings):
 
     rate_limit_per_minute: int = 100  # spec p.86
     approval_ttl_minutes: int = 15
+    # DA-14: transient execution logs, planner checkpoints and stream entries are wiped after this many days.
+    transient_retention_days: int = Field(default=30, ge=30, le=365)
     # PO-04: "required" -> every approval decision must carry the approver's Ed25519 signature.
     approval_signatures: str = Field(default="required", pattern="^(required|optional)$")
     dispatch_grace_seconds: int = 20

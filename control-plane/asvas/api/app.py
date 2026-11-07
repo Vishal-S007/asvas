@@ -398,6 +398,13 @@ def create_app(deps: Deps | None = None) -> FastAPI:
         return engine.decide_approval(deps_of(request), p.tenant_id, apid, p.user_id, p.role, body.decision,
                                       body.binding_hash, body.reason, body.key_id, body.signature)
 
+    @api.get("/jobs/{jid}/execution-log")
+    def execution_log(jid: uuid.UUID, p: Principal = Depends(rate_limited)):
+        """Transient operational log for a job (DA-14: wiped after the retention period; evidence is kept)."""
+        with tenant_tx(p.tenant_id) as conn:
+            return rows(conn, "SELECT id, attempt, event, detail, created_at FROM execution_log WHERE job_id = :j "
+                              "ORDER BY id", j=str(jid))
+
     @api.get("/approver-keys")
     def my_keys(p: Principal = Depends(role("approver"))):
         with tenant_tx(p.tenant_id) as conn:

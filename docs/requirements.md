@@ -101,7 +101,7 @@ Status legend:
 | DA-11 | Reports JSON/Markdown/PDF, via separate worker | 15-16 | Done (M2) | JSON/Markdown on demand; PDF rendered in memory by the separate `asvas report-worker`, SHA-256, audited; encryption of stored reports still open (CP-11) |
 | DA-12 | Compliance mapping (NIST 800-53, ISO 27001, SOC2, OWASP) | 15, 59-61 | Planned (M4) | Not claimed |
 | DA-13 | Redact secrets before external model; untrusted output treated as data | 22, 26, 55, 74, 78, 80 | Done | `redaction.py`; target text enters prompts only as escaped, truncated quoted data; tested |
-| DA-14 | Retention 30 days for transient logs; partitioning | 77, 85 | Planned (M3) | |
+| DA-14 | Retention 30 days for transient logs; partitioning | 77, 84-85 | Partial (M3) | `execution_log` range-partitioned by day (dispatch + per-request result lines; `/jobs/{id}/execution-log`); daily maintenance in the orchestrator (Redis-locked, once/day) creates partitions 7 days ahead, drops partitions older than retention+1 day via SECURITY DEFINER functions (DB refuses < 30 days), purges LangGraph checkpoints of assessments ended > 30 days, trims Redis Streams; purges audited per tenant. Evidence/findings/audit are not transient and are kept. Tests `test_retention.py`. Open: `audit_events`/`evidence` not partitioned; no long-term retention/deletion policy for evidence; var/logs file rotation not managed |
 | DA-15 | Bloom-filter dedupe of discovery stream; streaming JSON parse | 10 | Planned (M3) | M1/M2 dedupe by unique constraints and fingerprints |
 
 ## 6. Dashboard / HITL UI

@@ -19,7 +19,7 @@ from typing import Any
 import redis
 from sqlalchemy import Connection, Engine, text
 
-from asvas import audit, signatures
+from asvas import audit, retention, signatures
 from asvas.canonical import binding_hash, canonical_json
 from asvas.config import get_settings
 from asvas.db import list_tenant_ids, row, rows, tenant_tx
@@ -443,6 +443,8 @@ def _dispatch(deps: Deps, conn: Connection, a: dict, job: dict) -> bool:
     if approval_payload:
         conn.execute(text("UPDATE approvals SET status='CONSUMED' WHERE id=:id"), {"id": approval_payload["approval_id"]})
     msg_id = bus.publish_job(deps.r, envelope)
+    retention.write(conn, tenant_id, a["id"], job["id"], attempt, "dispatched",
+                    {"tool_id": job["tool_id"], "stream_id": msg_id, "deadline_unix": deadline})
     audit.record(conn, tenant_id, "system:dispatcher", "tool.dispatched",
                  {"job_id": str(job["id"]), "attempt": attempt, "stream_id": msg_id, "tool_id": job["tool_id"],
                   "target": job["target"], "params": job["params"]}, a["id"])
@@ -571,6 +573,10 @@ def ingest_result(deps: Deps, fields: dict[str, str]) -> str:
                       "sandbox_attestation": res.get("sandbox_attestation"),
                       "blocked_redirects": [e["redirect"] for e in exchanges
                                             if (e.get("redirect") or {}).get("decision") == "blocked"]}, a["id"])
+        retention.write(conn, tenant_id, a["id"], job_id, attempt, "result",
+                        {"status": status, "worker_id": res.get("worker_id"), "backend": res.get("backend"),
+                         "egress_mode": res.get("egress_mode"), "error": res.get("error"),
+                         "requests_used": res.get("requests_used"), "requests": retention.exchange_lines(exchanges)})
         ev_ids = store_exchanges(conn, tenant_id, a["id"], job_id, attempt, exchanges) if exchanges else {}
         if status == "SUCCEEDED":
             svc = correlate_assets(conn, tenant_id, a["id"], job["target"], exchanges)

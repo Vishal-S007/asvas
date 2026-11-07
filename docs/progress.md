@@ -115,3 +115,10 @@ as the source of truth.
   wrong key, DB owner deletes an event with the trigger disabled -> cross-check reports it, checkpoint rows append-only, key mode).
   Dev stack: 460 events exported and cross-checked OK.
 - Incomplete: immutable storage backend (Object Lock); scheduled export.
+
+### M3 — DA-14 retention and partitioning (2026-11-07)
+- Done: migration 0007 (`execution_log` partitioned by day, RLS; partition functions with a 30-day floor); `asvas/retention.py`;
+  orchestrator runs it daily; CLI `asvas retention`; API `/jobs/{id}/execution-log`.
+- Tested: `test_retention.py` 6 passed (dispatch log line, only partitions > 31 days dropped + audited, floor enforced in DB and config,
+  app role cannot read partitions directly, old checkpoints purged, stream trim + once-per-day lock). Full Python suite 132 passed.
+- Incomplete: partitioning of `audit_events`/`evidence`; evidence retention policy; log-file rotation.
