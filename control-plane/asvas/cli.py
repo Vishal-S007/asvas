@@ -125,6 +125,7 @@ def main(argv: list[str] | None = None) -> int:
     av.add_argument("--public-key", required=True, help="base64 Ed25519 ledger public key")
     av.add_argument("--db", action="store_true")
     sub.add_parser("audit-public-key", help="print the ledger public key (distribute out of band)")
+    sub.add_parser("mcp", help="read-only MCP server on stdio (needs ASVAS_MCP_TOKEN)")
     sub.add_parser("retention", help="run the retention/partition maintenance task now (normally daily, automatic)")
     a = p.parse_args(argv)
     if a.cmd == "migrate":
@@ -171,6 +172,11 @@ def main(argv: list[str] | None = None) -> int:
             res = (ax_.cross_check if a.db else ax_.verify)(a.export_dir, a.public_key)
             print(json.dumps(res, indent=2))
             return 0 if res["ok"] else 1
+    elif a.cmd == "mcp":
+        logging.getLogger().handlers.clear()  # stdout belongs to the MCP protocol
+        logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+        from asvas.mcp_server import run_stdio
+        run_stdio()
     elif a.cmd == "retention":
         from asvas import retention
         from asvas.orchestration.bus import get_redis

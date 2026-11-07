@@ -176,3 +176,8 @@ as the source of truth.
 - Done: `asvas/longterm.py`, `scripts/qdrant-dev.sh`, completion hook, planner context, Controls item.
 - Tested against live local Qdrant: `test_longterm.py` 7 passed (isolation across two tenants, API key required, foreign point
   dropped, anonymised text has no IP/port/URL, recall feeds next planning context, guard, disabled mode).
+
+### PL-08 MCP (read-only)
+- Done: `asvas/mcp_server.py`, `asvas mcp`. Dependency added: `mcp==2.3.0` (1.20 was incompatible with pydantic 2.14).
+- Tested: `test_mcp.py` 5 passed (read-only annotations, auth refused without/with bad token, tenant isolation, dry-run creates no
+  jobs, stdio subprocess end to end).
