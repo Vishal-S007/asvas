@@ -30,10 +30,10 @@ from asvas.evidence import (
     record_findings,
     store_exchanges,
 )
-from asvas.orchestration import bus
+from asvas.orchestration import bus, memory
 from asvas.planning.graph import PlanState, build_planner, record_planning_audit
 from asvas.planning.providers import ModelProvider, get_provider
-from asvas.planning.validate import fingerprint
+from asvas.planning.validate import fingerprint, path_id
 from asvas.policy import OpaClient, build_input
 from asvas.scope import Scope, TestingPolicy, check_authorization_window, resolve
 from asvas.statemachine import ASSESSMENT_TERMINAL, IllegalTransition, transition_assessment, transition_job
@@ -156,10 +156,15 @@ def _materialize(deps: Deps):
                        {"job_id": str(job_id), "rationale": s["rationale"]})
         conn.execute(text(
             "UPDATE assessments SET planning_rounds = planning_rounds + 1, tokens_used = tokens_used + :tok, "
+            "cost_usd_micros = cost_usd_micros + :cost, "
             "provider_name = :p, provider_is_live_ai = :live, planner_done = :done WHERE id = :id"),
-            {"tok": state.get("tokens", 0), "p": state.get("provider_name"), "live": state.get("is_live_ai"),
+            {"tok": state.get("tokens", 0), "cost": state.get("cost_micros", 0), "p": state.get("provider_name"), "live": state.get("is_live_ai"),
              "done": bool(state.get("done")), "id": str(aid)})
         record_planning_audit(conn, tenant_id, aid, state)
+        memory.note_round(deps.r, aid, round_no, {"accepted": len(state.get("accepted", [])),
+                                                  "rejected": len(state.get("rejected", [])),
+                                                  "done": bool(state.get("done"))},
+                          a["testing_policy"]["max_wall_clock_minutes"])
     return fn
 
 
@@ -193,19 +198,22 @@ def _run_planning_round(deps: Deps, tenant_id, assessment_id) -> None:
     except Exception as e:  # noqa: BLE001 - e.g. missing API key: fail honestly
         _fail(deps, tenant_id, assessment_id, f"planning provider unavailable: {e}")
         return
-    graph = build_planner(deps.engine, provider, _materialize(deps), deps.resolve_fn, deps.checkpointer)
+    graph = build_planner(deps.engine, provider, _materialize(deps), deps.resolve_fn, deps.checkpointer,
+                          blocked_fn=lambda aid: memory.blocked_paths(deps.r, aid))
     cfg = {"configurable": {"thread_id": f"{assessment_id}:{round_no}"}, "recursion_limit": 12}
     try:
         final = graph.invoke({"tenant_id": str(tenant_id), "assessment_id": str(assessment_id), "round": round_no,
-                              "attempts": 0, "tokens": 0, "rejected": []}, cfg)
+                              "attempts": 0, "tokens": 0, "cost_micros": 0, "rejected": []}, cfg)
     except Exception as e:
         log.exception("planning graph crashed")
         _fail(deps, tenant_id, assessment_id, f"planning graph error: {type(e).__name__}: {e}")
         return
     if final.get("error"):
         with _tx(deps, tenant_id) as conn:
-            conn.execute(text("UPDATE assessments SET provider_name = :p, provider_is_live_ai = :l WHERE id = :id"),
-                         {"p": final.get("provider_name"), "l": final.get("is_live_ai"), "id": str(assessment_id)})
+            conn.execute(text("UPDATE assessments SET provider_name = :p, provider_is_live_ai = :l, "
+                              "tokens_used = tokens_used + :tok, cost_usd_micros = cost_usd_micros + :c WHERE id = :id"),
+                         {"p": final.get("provider_name"), "l": final.get("is_live_ai"), "tok": final.get("tokens", 0),
+                          "c": final.get("cost_micros", 0), "id": str(assessment_id)})
         _fail(deps, tenant_id, assessment_id, final["error"])
         return
     advance(deps, tenant_id, assessment_id, from_planning=True)
@@ -532,7 +540,7 @@ def _summary(conn, assessment_id) -> dict:
 
 def _clear_short_term(deps: Deps, assessment_id) -> None:
     """Short-term (Redis) state for a run is discarded when it ends (spec p.16). Halt key is kept 24h."""
-    for k in deps.r.scan_iter(f"asvas:st:{assessment_id}:*"):
+    for k in memory.keys(deps.r, assessment_id):
         deps.r.delete(k)
 
 
@@ -586,9 +594,11 @@ def ingest_result(deps: Deps, fields: dict[str, str]) -> str:
             else:
                 record_findings(conn, tenant_id, a["id"], job, svc, ev_ids, hits)
             transition_job(conn, tenant_id, job_id, "SUCCEEDED", f"worker:{res.get('worker_id')}")
+            memory.reset_failures(deps.r, a["id"], path_id(job["tool_id"], job["target"]))
         elif status in ("FAILED", "TIMED_OUT"):
             transition_job(conn, tenant_id, job_id, status, f"worker:{res.get('worker_id')}", res.get("error"))
-            _maybe_retry(conn, tenant_id, a, job)
+            if not _path_failed(deps, conn, tenant_id, a, job):
+                _maybe_retry(conn, tenant_id, a, job)
         elif status == "CANCELLED":
             transition_job(conn, tenant_id, job_id, "CANCELLED", f"worker:{res.get('worker_id')}", res.get("error"))
         elif status == "DENIED":
@@ -630,6 +640,20 @@ def sync_graph(deps: Deps, tenant_id, assessment_id) -> str | None:
         if err:
             audit.record(conn, tenant_id, "system:graph", "graph.sync_failed", {"error": err}, assessment_id)
     return err
+
+
+def _path_failed(deps: Deps, conn, tenant_id, a: dict, job: dict) -> bool:
+    """PL-05: count consecutive failures per path; at the threshold the path is blocked (no retries, and the
+    planner may not propose it again). Returns True when the path is now blocked."""
+    path = path_id(job["tool_id"], job["target"])
+    minutes = a["testing_policy"]["max_wall_clock_minutes"]
+    n = memory.record_failure(deps.r, a["id"], path, minutes)
+    if n < memory.FAILURE_THRESHOLD:
+        return False
+    memory.block(deps.r, a["id"], path, minutes)
+    audit.record(conn, tenant_id, "system:orchestrator", "plan.path_blocked",
+                 {"path": path, "consecutive_failures": n, "job_id": str(job["id"])}, a["id"])
+    return True
 
 
 def _maybe_retry(conn, tenant_id, a: dict, job: dict) -> None:

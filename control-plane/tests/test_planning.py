@@ -17,6 +17,13 @@ from asvas.scope import Scope, TestingPolicy
 from tests.conftest import scope_body
 
 
+def _live(monkeypatch, pin=3.0, pout=15.0):
+    from asvas.config import get_settings
+    monkeypatch.setattr(get_settings(), "anthropic_api_key", __import__("pydantic").SecretStr("k"))
+    monkeypatch.setattr(get_settings(), "model_input_usd_per_mtok", pin)
+    monkeypatch.setattr(get_settings(), "model_output_usd_per_mtok", pout)
+
+
 def _scope():
     return Scope.model_validate(scope_body()["scope"])
 
@@ -84,8 +91,7 @@ def _ctx():
 
 
 def test_anthropic_provider_validates_and_redacts(monkeypatch):
-    from asvas.config import get_settings
-    monkeypatch.setattr(get_settings(), "anthropic_api_key", __import__("pydantic").SecretStr("k"))
+    _live(monkeypatch)
     sent = {}
 
     def handler(req: httpx.Request):
@@ -108,15 +114,13 @@ def test_anthropic_provider_validates_and_redacts(monkeypatch):
     httpx.Response(500, json={}),
 ])
 def test_anthropic_provider_invalid_output_is_honest_error(monkeypatch, response):
-    from asvas.config import get_settings
-    monkeypatch.setattr(get_settings(), "anthropic_api_key", __import__("pydantic").SecretStr("k"))
+    _live(monkeypatch)
     with pytest.raises(ProviderError):
         AnthropicProvider(transport=httpx.MockTransport(lambda r: response)).propose(_ctx())
 
 
 def test_anthropic_provider_timeout(monkeypatch):
-    from asvas.config import get_settings
-    monkeypatch.setattr(get_settings(), "anthropic_api_key", __import__("pydantic").SecretStr("k"))
+    _live(monkeypatch)
 
     def boom(_):
         raise httpx.ReadTimeout("t")

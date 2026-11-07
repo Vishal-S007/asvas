@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = None
     anthropic_base_url: str = "https://api.anthropic.com"
     model_timeout_seconds: float = 10.0  # spec p.54: < 10 s
+    # PL-09 (spec pp. 22-23): per-step cost ceiling. Prices are deployment configuration (USD per million tokens)
+    # and are not guessed: a live provider refuses to run while they are unset.
+    max_cost_per_step_usd: float = Field(default=0.50, gt=0, le=0.50)
+    model_input_usd_per_mtok: float | None = Field(default=None, ge=0)
+    model_output_usd_per_mtok: float | None = Field(default=None, ge=0)
     # What to do when the live model fails: "none" = fail the planning round honestly (default);
     # "deterministic-test" = continue with the rule-based planner, recorded and shown as NOT AI.
     model_fallback: str = Field(default="none", pattern="^(none|deterministic-test)$")

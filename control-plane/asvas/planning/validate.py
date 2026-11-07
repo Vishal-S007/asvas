@@ -79,9 +79,15 @@ class ValidationOutcome:
     rejected: list[tuple[PlanStep, list[str]]] = field(default_factory=list)
 
 
+def path_id(tool_id: str, target: dict) -> str:
+    """A planning path = one tool against one service; PL-05 counts consecutive failures per path."""
+    return f"{tool_id}|{target['scheme']}://{target['host']}:{target['port']}"
+
+
 def validate_proposal(proposal: PlanProposal, scope: Scope, policy: dict, existing_fingerprints: set[str],
                       existing_job_count: int, round_no: int,
-                      resolve_fn: Callable[[str], list[str]] = resolve) -> ValidationOutcome:
+                      resolve_fn: Callable[[str], list[str]] = resolve,
+                      blocked_paths: set[str] | frozenset[str] = frozenset()) -> ValidationOutcome:
     out = ValidationOutcome()
     ids = [s.step_id for s in proposal.steps]
     dup_ids = {i for i in ids if ids.count(i) > 1}
@@ -130,6 +136,8 @@ def validate_proposal(proposal: PlanProposal, scope: Scope, policy: dict, existi
         reasons.extend(scope_reasons)
         if not scope_reasons:
             ips = resolve_fn(target["host"])
+        if path_id(s.tool_id, target) in blocked_paths:
+            reasons.append("path blocked after 3 consecutive failures (PL-05)")
         fp = fingerprint(s.tool_id, target, params)
         if fp in existing_fingerprints or fp in seen_fp:
             reasons.append("loop/duplicate: identical action already planned or executed")

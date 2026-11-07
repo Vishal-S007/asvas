@@ -122,3 +122,9 @@ as the source of truth.
 - Tested: `test_retention.py` 6 passed (dispatch log line, only partitions > 31 days dropped + audited, floor enforced in DB and config,
   app role cannot read partitions directly, old checkpoints purged, stream trim + once-per-day lock). Full Python suite 132 passed.
 - Incomplete: partitioning of `audit_events`/`evidence`; evidence retention policy; log-file rotation.
+
+### M3 — DA-05 / PL-05 / PL-09 (2026-11-07)
+- Done: `orchestration/memory.py` (short-term Redis memory with TTL, erased at end); path blocking after 3 consecutive failures;
+  per-step cost ceiling and per-assessment cost budget (migration 0008); live provider refuses without configured prices.
+- Tested: `test_planning_controls.py` 11 passed. Full Python suite 142 passed.
+- Not claimed: no real model was called; cost logic is tested with mocked responses only.

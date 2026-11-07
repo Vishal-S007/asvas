@@ -118,6 +118,8 @@ class TestingPolicy(Strict):
     job_timeout_seconds: int = Field(default=20, ge=5, le=30)  # spec p.14: validation < 30 s
     max_wall_clock_minutes: int = Field(default=30, ge=1, le=720)  # spec p.50: < 12 h per segment
     max_tokens: int = Field(default=20000, ge=0, le=500000)
+    # PL-09: total model spend per assessment, in US cents (integers: policy material is canonical-JSON hashed).
+    max_cost_usd_cents: int = Field(default=200, ge=0, le=10000)
     max_planning_rounds: int = Field(default=3, ge=1, le=5)
     max_plan_depth: int = Field(default=15, ge=1, le=15)  # spec p.9: D_max = 15
     max_jobs: int = Field(default=50, ge=1, le=200)

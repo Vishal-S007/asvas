@@ -39,6 +39,7 @@ class PlanState(TypedDict, total=False):
     round: int
     attempts: int
     tokens: int
+    cost_micros: int
     provider_name: str
     is_live_ai: bool
     proposal: dict[str, Any] | None
@@ -81,7 +82,8 @@ def build_context(conn, assessment: dict, round_no: int) -> PlanningContext:
 
 def build_planner(engine: Engine | None, provider: ModelProvider,
                   materialize_fn: Callable[[Any, dict, PlanState], None],
-                  resolve_fn: Callable[[str], list[str]] = resolve, checkpointer=None):
+                  resolve_fn: Callable[[str], list[str]] = resolve, checkpointer=None,
+                  blocked_fn: Callable[[str], set[str]] = lambda _aid: set()):
     tx = functools.partial(tenant_tx, engine=engine)
 
     def propose(state: PlanState) -> PlanState:
@@ -92,16 +94,22 @@ def build_planner(engine: Engine | None, provider: ModelProvider,
             used = a["tokens_used"] + state.get("tokens", 0)
             if provider.is_live_ai and used >= policy["max_tokens"]:
                 return {"error": f"token budget exhausted ({used}/{policy['max_tokens']})"}
+            spent = a.get("cost_usd_micros", 0) + state.get("cost_micros", 0)
+            cap = policy.get("max_cost_usd_cents", 200) * 10_000
+            if provider.is_live_ai and spent >= cap:
+                return {"error": f"cost budget exhausted (${spent / 1e6:.4f} of ${cap / 1e6:.2f})"}
             started = a["started_at"]
             if started and dt.datetime.now(dt.UTC) - started > dt.timedelta(minutes=policy["max_wall_clock_minutes"]):
                 return {"error": "wall-clock budget exhausted"}
             ctx = build_context(conn, a, state["round"])
+            ctx.blocked_paths = sorted(blocked_fn(state["assessment_id"]))
         try:
             res = provider.propose(ctx)
         except ProviderError as e:
             return {"error": f"planning provider '{provider.name}' failed: {e}",
                     "provider_name": provider.name, "is_live_ai": provider.is_live_ai}
         return {"proposal": res.proposal.model_dump(), "tokens": state.get("tokens", 0) + res.tokens_used,
+                "cost_micros": state.get("cost_micros", 0) + round(res.cost_usd * 1_000_000),
                 "provider_name": res.provider_name, "is_live_ai": res.is_live_ai, "error": None,
                 "done": res.proposal.done}
 
@@ -114,7 +122,7 @@ def build_planner(engine: Engine | None, provider: ModelProvider,
             count = len(fps)
         proposal = PlanProposal.model_validate(state["proposal"])
         outcome = validate_proposal(proposal, Scope.model_validate(a["scope"]), a["testing_policy"], fps, count,
-                                    state["round"], resolve_fn)
+                                    state["round"], resolve_fn, blocked_fn(state["assessment_id"]))
         return {
             "accepted": [{"step": v.step.model_dump(), "target": v.target, "params": v.params,
                           "resolved_ips": v.resolved_ips, "fingerprint": v.fingerprint, "depth": v.depth}
@@ -157,5 +165,5 @@ def record_planning_audit(conn, tenant_id, assessment_id, state: PlanState) -> N
         "accepted": len(state.get("accepted", [])), "rejected": len(state.get("rejected", [])),
         "rejections": [{"tool_id": r["step"]["tool_id"], "target": r["step"]["target"], "reasons": r["reasons"]}
                        for r in state.get("rejected", [])],
-        "tokens": state.get("tokens", 0), "done": state.get("done"),
+        "tokens": state.get("tokens", 0), "cost_usd": state.get("cost_micros", 0) / 1e6, "done": state.get("done"),
     }, assessment_id)
