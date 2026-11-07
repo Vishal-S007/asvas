@@ -7,7 +7,7 @@ import { usePersona } from "../persona";
 
 interface Worker { worker_id: string; heartbeat_unix: number; backend: string; isolation_level: string; egress_mode: string; note: string;
   slots: number; running_jobs: number; policy_sha256: string; version: string; uid: number; stale: boolean; loopback_targets_allowed: boolean;
-  grpc_addr?: string; grpc?: { reachable: boolean; mtls?: boolean; detail?: string } }
+  grpc_addr?: string; syscall_monitor?: string; grpc?: { reachable: boolean; mtls?: boolean; detail?: string } }
 interface Status { workers: Worker[]; redis_ok: boolean; policy_engine: { reachable: boolean; policy_loaded: boolean; url: string };
   emergency_stop: boolean; emergency_stop_detail: { reason: string; stopped_at: string } | null;
   planner: { provider: string; is_live_ai: boolean }; unavailable_features: { feature: string; requirement: string; reason: string }[] }
@@ -39,6 +39,7 @@ export function SystemPage() {
                 <dt>Backend</dt><dd>{w.backend}</dd>
                 <dt>Isolation</dt><dd>{w.isolation_level}<div className="small warn">{w.note}</div></dd>
                 <dt>Egress control</dt><dd>{w.egress_mode}</dd>
+                <dt>Syscall monitor</dt><dd>{w.syscall_monitor ?? <span className="muted">not reported</span>}</dd>
                 <dt>Direct channel</dt><dd>{w.grpc?.reachable
                   ? <><span className="badge ok">gRPC · mutual TLS 1.3</span> <code className="small">{w.grpc_addr}</code></>
                   : <span className="muted">unavailable{w.grpc?.detail ? ` — ${w.grpc.detail}` : ""} (control still flows via signed Redis stream)</span>}</dd>

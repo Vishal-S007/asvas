@@ -507,10 +507,8 @@ def create_app(deps: Deps | None = None) -> FastAPI:
                 "planner": {"provider": s.model_provider,
                             "is_live_ai": s.model_provider != "deterministic-test"},
                 "unavailable_features": [
-                    {"feature": "Firecracker microVM isolation", "requirement": "PO-10", "reason": "needs KVM host"},
-                    {"feature": "eBPF syscall monitor", "requirement": "PO-12", "reason": "needs eBPF-capable host"},
-                    {"feature": "Qdrant long-term memory", "requirement": "DA-04", "reason": "planned M3"},
-                    {"feature": "Compliance mapping", "requirement": "DA-12", "reason": "planned M4"},
+                    {"feature": "Firecracker microVM isolation", "requirement": "PO-10",
+                     "reason": "backend code exists but this host has no /dev/kvm; untested until run on a KVM host"},
                 ]}
 
     @api.get("/compliance/controls")

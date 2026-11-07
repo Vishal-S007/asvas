@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.26.10
 
 require (
+	github.com/cilium/ebpf v0.22.0
 	github.com/open-policy-agent/opa v1.21.4
 	github.com/redis/go-redis/v9 v9.23.0
 	golang.org/x/sys v0.49.0

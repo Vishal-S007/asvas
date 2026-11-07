@@ -33,7 +33,7 @@ func env(k, def string) string {
 }
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "sandbox-child" || os.Args[1] == "egress-probe") {
+	if len(os.Args) > 1 && (os.Args[1] == "sandbox-child" || os.Args[1] == "egress-probe" || os.Args[1] == "exec-probe") {
 		os.Exit(sandbox.ChildMain(os.Args[1]))
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -93,6 +93,12 @@ func run(log *slog.Logger) error {
 			} else {
 				log.Info("egress self-test passed", "detail", detail)
 			}
+		}
+		if ok, detail := d.SyscallSelfTest(ctx); ok {
+			log.Info("syscall monitor self-test passed", "detail", detail)
+		} else if d.Info().SyscallMonitor != "" && strings.HasPrefix(d.Info().SyscallMonitor, "ebpf") {
+			d.SetSyscallMonitor("ebpf self-test FAILED: " + detail)
+			log.Error("syscall monitor self-test failed", "detail", detail)
 		}
 		sb = d
 	default:

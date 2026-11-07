@@ -47,6 +47,8 @@ start orchestrator bash -c "cd control-plane && exec uv run asvas orchestrator"
 start report-worker bash -c "cd control-plane && exec uv run asvas report-worker"
 (cd execution-plane && go build -o bin/asvas-executor ./cmd/asvas-executor && chmod 755 bin/asvas-executor)
 if [ "$(id -u)" = "0" ]; then
+  # PO-12 syscall monitor needs tracefs (raw_syscalls tracepoint) and cgroup v2
+  [ -d /sys/kernel/tracing/events ] || mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || true
   start executor execution-plane/bin/asvas-executor
 else
   echo "NOTE: executor not root -> no per-UID sandbox and no nftables egress (degraded; shown in dashboard)."

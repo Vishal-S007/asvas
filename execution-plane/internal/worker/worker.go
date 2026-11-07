@@ -452,7 +452,8 @@ func (w *Worker) heartbeat(ctx context.Context) {
 		w.mu.Unlock()
 		hb, _ := json.Marshal(map[string]any{"heartbeat_unix": time.Now().Unix(), "backend": info.Backend,
 			"isolation_level": info.IsolationLevel, "egress_mode": info.EgressMode, "note": info.Note,
-			"slots": w.cfg.Slots, "running_jobs": n, "policy_sha256": w.cfg.PolicySHA, "version": w.cfg.Version,
+			"syscall_monitor": info.SyscallMonitor,
+			"slots":           w.cfg.Slots, "running_jobs": n, "policy_sha256": w.cfg.PolicySHA, "version": w.cfg.Version,
 			"pid": os.Getpid(), "uid": os.Geteuid(), "started_unix": w.started.Unix(),
 			"loopback_targets_allowed": w.cfg.Net.AllowLoopback, "grpc_addr": w.cfg.GRPCAddr})
 		w.rdb.HSet(context.Background(), Workers, w.cfg.WorkerID, string(hb))

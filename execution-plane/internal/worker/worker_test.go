@@ -34,7 +34,7 @@ const master = "go-test-master-key"
 
 // The sandbox re-executes the current binary; in tests that is this test binary.
 func TestMain(m *testing.M) {
-	if len(os.Args) > 1 && (os.Args[1] == "sandbox-child" || os.Args[1] == "egress-probe") {
+	if len(os.Args) > 1 && (os.Args[1] == "sandbox-child" || os.Args[1] == "egress-probe" || os.Args[1] == "exec-probe") {
 		os.Exit(sandbox.ChildMain(os.Args[1]))
 	}
 	sandbox.BaseUID = 63000
@@ -475,5 +475,18 @@ func TestKernelEgressRequirementEnforced(t *testing.T) {
 		if r := f.exec(t, f.envelope(req)); r.Status != "SUCCEEDED" {
 			t.Fatalf("enforced egress but denied: %s %s", r.Status, r.Error)
 		}
+	}
+}
+
+func TestSyscallMonitorKillsDeniedSyscallInSandbox(t *testing.T) {
+	f := setup(t, nil)
+	defer f.close()
+	sb := f.w.sb.(*sandbox.DevProcess)
+	if !strings.HasPrefix(sb.Info().SyscallMonitor, "ebpf") {
+		t.Skipf("eBPF syscall monitor not running: %s", sb.Info().SyscallMonitor)
+	}
+	ok, detail := sb.SyscallSelfTest(context.Background())
+	if !ok {
+		t.Fatalf("denied syscall was not stopped: %s", detail)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/asvas/execution-plane/internal/ebpfmon"
 	"io"
 	"os"
 	"os/exec"
@@ -33,6 +34,7 @@ type Info struct {
 	IsolationLevel string `json:"isolation_level"`
 	EgressMode     string `json:"egress_mode"`
 	Note           string `json:"note"`
+	SyscallMonitor string `json:"syscall_monitor"`
 }
 
 type Backend interface {
@@ -64,6 +66,7 @@ type DevProcess struct {
 	maxOut int64
 	info   Info
 	issuer *Issuer
+	mon    *ebpfmon.Monitor
 }
 
 func NewDevProcess(slots int) (*DevProcess, error) {
@@ -92,7 +95,16 @@ func NewDevProcess(slots int) (*DevProcess, error) {
 			mode = "app-pinned-only (nftables unavailable: " + err.Error() + ")"
 		}
 	}
-	d.info = Info{Backend: "devprocess", IsolationLevel: level, EgressMode: mode,
+	monState := "not running (executor is not root)"
+	if d.asRoot && os.Getenv("ASVAS_SYSCALL_MONITOR") != "off" {
+		if m, err := ebpfmon.New(ebpfmon.DefaultDeny); err == nil {
+			d.mon = m
+			monState = "ebpf: raw_syscalls tracepoint, in-kernel SIGKILL on denied syscalls (PO-12)"
+		} else {
+			monState = "unavailable: " + err.Error()
+		}
+	}
+	d.info = Info{Backend: "devprocess", IsolationLevel: level, EgressMode: mode, SyscallMonitor: monState,
 		Note: "Approved development substitute for Firecracker; not equivalent isolation."}
 	return d, nil
 }
@@ -148,14 +160,35 @@ func (d *DevProcess) runChild(ctx context.Context, slot int, mode string, stdin 
 		uid := uint32(BaseUID + slot)
 		attr.Credential = &syscall.Credential{Uid: uid, Gid: uid, Groups: []uint32{}}
 	}
+	var cgID uint64
+	if d.mon != nil && (mode == "sandbox-child" || mode == "exec-probe") {
+		fd, id, _, err := ebpfmon.SandboxCgroup(fmt.Sprintf("asvas-sandbox-%d", BaseUID), slot)
+		if err != nil {
+			return checks.Result{}, fmt.Errorf("syscall monitor cgroup: %w", err)
+		}
+		defer syscall.Close(fd)
+		attr.UseCgroupFD, attr.CgroupFD, cgID = true, fd, id
+	}
 	cmd.SysProcAttr = attr
 	if err := cmd.Start(); err != nil {
 		return checks.Result{}, err
+	}
+	if cgID != 0 { // exec of the sandbox binary itself has completed; everything from here on is monitored
+		if err := d.mon.Watch(cgID); err != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			return checks.Result{}, fmt.Errorf("syscall monitor watch: %w", err)
+		}
+		defer func() { _ = d.mon.Unwatch(cgID); d.mon.Forget(cgID) }()
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {
 	case err := <-done:
+		if cgID != 0 {
+			if v, hit := d.mon.Violation(cgID); hit {
+				return checks.Result{}, fmt.Errorf("sandbox killed by syscall monitor (PO-12): denied syscall %s", v.Name)
+			}
+		}
 		var r checks.Result
 		if jerr := json.Unmarshal(out.Bytes(), &r); jerr != nil {
 			return r, fmt.Errorf("sandbox child failed (%v): %s", err, strings.TrimSpace(errb.String()))
@@ -180,6 +213,22 @@ func (d *DevProcess) SelfTest(ctx context.Context, probePort int) (bool, string)
 	}
 	return r.Error != "", r.Error
 }
+
+// SyscallSelfTest proves the syscall monitor kills a sandbox that tries a denied syscall (execve).
+func (d *DevProcess) SyscallSelfTest(ctx context.Context) (bool, string) {
+	if d.mon == nil {
+		return false, "monitor not running"
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	_, err := d.runChild(ctx, 0, "exec-probe", []byte("{}"))
+	if err != nil && strings.Contains(err.Error(), "denied syscall execve") {
+		return true, err.Error()
+	}
+	return false, fmt.Sprintf("probe was not killed by the monitor (err=%v)", err)
+}
+
+func (d *DevProcess) SetSyscallMonitor(state string) { d.info.SyscallMonitor = state }
 
 type limitedWriter struct {
 	w io.Writer
@@ -237,7 +286,10 @@ func ChildMain(mode string) int {
 	var res checks.Result
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(max(1000, spec.TimeoutMS))*time.Millisecond)
 	defer cancel()
-	if mode == "egress-probe" {
+	if mode == "exec-probe" { // syscall-monitor self-test: must be killed at execve
+		_ = syscall.Exec("/bin/true", []string{"true"}, nil)
+		res.Error = "exec-probe: execve was NOT blocked"
+	} else if mode == "egress-probe" {
 		c, err := (&netDialer{}).dial(ctx, fmt.Sprintf("127.0.0.1:%d", spec.Target.Port))
 		if err == nil {
 			c.Close()
