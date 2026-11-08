@@ -90,7 +90,8 @@ def test_dev_tokens_refused_in_production(client, monkeypatch):
 
 def test_production_requires_oidc_and_mfa():
     from asvas.config import Settings
-    base = dict(env="production", jwt_secret="j" * 40, signing_key="s" * 40, allow_loopback_targets=False)
+    base = dict(env="production", jwt_secret="j" * 40, signing_key="s" * 40, allow_loopback_targets=False,
+                cors_origins=["https://asvas.example"])
     with pytest.raises(ValueError, match="OIDC_ISSUER"):
         Settings(**base)
     with pytest.raises(ValueError, match="MFA"):
