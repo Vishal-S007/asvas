@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     jwt_ttl_minutes: int = 60
     # CP-07: enterprise SSO via OIDC (tested with Keycloak). When oidc_issuer is set the API accepts RS256/ES256
     # access tokens from that issuer (JWKS-verified, audience asvas-api). Outside development it is the only way in.
+    # Browser origins allowed to call the API (the dashboard). Production must list its real origin explicitly.
+    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     oidc_issuer: str = ""
     oidc_client_id: str = "asvas-dashboard"
     oidc_audience: str = "asvas-api"
@@ -97,6 +99,8 @@ class Settings(BaseSettings):
                     raise ValueError(f"ASVAS_{name.upper()} must be at least 32 characters")
             if self.allow_loopback_targets:
                 raise ValueError("loopback targets cannot be enabled in production")
+            if any("localhost" in o or "127.0.0.1" in o for o in self.cors_origins):
+                raise ValueError("ASVAS_CORS_ORIGINS must name the production dashboard origin, not localhost")
             if not self.oidc_issuer:
                 raise ValueError("ASVAS_OIDC_ISSUER must be set outside development (dev-login is disabled there)")
             if not self.oidc_require_mfa:

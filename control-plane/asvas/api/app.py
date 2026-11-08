@@ -64,11 +64,29 @@ def token_bucket(r, key: str, per_minute: int) -> tuple[bool, int]:
 
 def create_app(deps: Deps | None = None) -> FastAPI:
     s = get_settings()
-    app = FastAPI(title="ASVAS Control Plane", version="0.1.0-m1",
-                  description="Milestone-1 development build. Not production-ready.")
+    app = FastAPI(title="ASVAS Control Plane", version="0.4.0-m4",
+                  description="Development build. Not production-ready.",
+                  docs_url="/docs" if s.env == "development" else None,
+                  redoc_url=None, openapi_url="/openapi.json" if s.env == "development" else None)
     app.state.deps = deps or Deps()
-    app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    app.add_middleware(CORSMiddleware, allow_origins=s.cors_origins,
                        allow_methods=["GET", "POST", "PATCH"], allow_headers=["Authorization", "Content-Type"])
+
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        """Defence-in-depth headers on every API response (security review 2026-11-08, finding SR-1)."""
+        resp = await call_next(request)
+        h = resp.headers
+        h.setdefault("X-Content-Type-Options", "nosniff")
+        h.setdefault("X-Frame-Options", "DENY")
+        h.setdefault("Referrer-Policy", "no-referrer")
+        h.setdefault("Cache-Control", "no-store")
+        h.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+        if not request.url.path.startswith("/docs"):
+            h.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        if s.api_tls_cert:
+            h.setdefault("Strict-Transport-Security", "max-age=31536000")
+        return resp
 
     @app.exception_handler(StarletteHTTPException)
     async def _http(_: Request, e: StarletteHTTPException):

@@ -51,6 +51,11 @@ setup)
    "config":{"access.token.claim":"true","id.token.claim":"true","introspection.token.claim":"true"}}]}
 J
   fi
+  # Keep redirect URIs/origins current (dev server :5173 and production-build preview :4173)
+  CID=$($A get clients -r asvas $CFG -q clientId=asvas-dashboard --fields id | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["id"])')
+  $A update "clients/$CID" -r asvas $CFG \
+    -s 'redirectUris=["http://localhost:5173/auth/callback","http://127.0.0.1:5173/auth/callback","http://127.0.0.1:4173/auth/callback"]' \
+    -s 'webOrigins=["http://localhost:5173","http://127.0.0.1:5173","http://127.0.0.1:4173"]'
   # Reference values so the AMR claim reports which factors were used ("pwd", "otp"); the API requires "otp".
   FLOW=browser
   for ex in $($A get "authentication/flows/$FLOW/executions" -r asvas $CFG | python3 -c '

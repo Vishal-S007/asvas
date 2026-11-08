@@ -81,7 +81,7 @@ def oidc_principal(token: str) -> Principal:
                             issuer=s.oidc_issuer, options={"require": ["sub", "exp", "iat", "iss", "aud"]})
     except jwt.PyJWTError as e:
         raise _unauth(f"invalid OIDC token: {e}") from e
-    if claims.get("azp") not in (None, s.oidc_client_id):
+    if claims.get("azp") != s.oidc_client_id:  # SR-3: only tokens issued to the ASVAS dashboard client
         raise _unauth("token was issued to a different client")
     if not claims.get("email") or claims.get("email_verified") is not True:
         raise _unauth("OIDC token has no verified e-mail")

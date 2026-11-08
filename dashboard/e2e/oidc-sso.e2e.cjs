@@ -8,6 +8,7 @@ const fs = require("fs");
 const path = require("path");
 
 const email = process.argv[2] || "operator@acme.test";
+const BASE = process.env.ASVAS_DASHBOARD_URL || "http://localhost:5173";
 const users = JSON.parse(fs.readFileSync(path.join(__dirname, "../../var/keycloak/dev-users.json"), "utf8"));
 const base32 = (s) => { const a = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"; let bits = "";
   for (const c of s.replace(/[\s=]/g, "").toUpperCase()) bits += a.indexOf(c).toString(2).padStart(5, "0");
@@ -22,7 +23,8 @@ const step = (m) => console.log("STEP", m);
   const ctx = await b.newContext({ ignoreHTTPSErrors: true });
   const p = await ctx.newPage();
   const errors = []; p.on("pageerror", (e) => errors.push(String(e)));
-  await p.goto("http://localhost:5173/");
+  p.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
+  await p.goto(BASE + "/");
   await p.getByRole("button", { name: "Sign in with SSO" }).click();
   await p.waitForURL(/localhost:8443\/realms\/asvas/);
   step("redirected to Keycloak with PKCE: " + new URL(p.url()).searchParams.get("code_challenge_method"));
@@ -58,7 +60,7 @@ const step = (m) => console.log("STEP", m);
     await p.fill("#otp", totp(secret)); await p.click("#kc-login");
     step("signed in with password + TOTP");
   }
-  await p.waitForURL("http://localhost:5173/assessments", { timeout: 20000 });
+  await p.waitForURL(BASE + "/assessments", { timeout: 20000 });
   const who = await p.locator(".whoami").innerText();
   step("dashboard session: " + who.replace(/\s+/g, " "));
   const token = await p.evaluate(() => sessionStorage.getItem("asvas.token") || Object.values(sessionStorage).find((v) => v.split(".").length === 3));

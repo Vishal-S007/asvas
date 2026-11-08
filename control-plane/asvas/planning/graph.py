@@ -114,7 +114,8 @@ def build_planner(engine: Engine | None, provider: ModelProvider,
                 return {}
             with tx(state["tenant_id"]) as conn:
                 a = row(conn, "SELECT * FROM assessments WHERE id = :id", id=state["assessment_id"])
-                assert a is not None
+                if a is None:
+                    raise LookupError(f"assessment {state['assessment_id']} not found")
                 if err := budget_error(a, state):
                     return {"error": err}
                 ctx = build_context(conn, a, state["round"])
@@ -147,7 +148,8 @@ def build_planner(engine: Engine | None, provider: ModelProvider,
     def validate(state: PlanState) -> PlanState:
         with tx(state["tenant_id"]) as conn:
             a = row(conn, "SELECT * FROM assessments WHERE id = :id", id=state["assessment_id"])
-            assert a is not None
+            if a is None:
+                raise LookupError(f"assessment {state['assessment_id']} not found")
             fps = {r["fingerprint"] for r in rows(conn, "SELECT fingerprint FROM jobs WHERE assessment_id = :a",
                                                   a=state["assessment_id"])}
             count = len(fps)
@@ -177,7 +179,8 @@ def build_planner(engine: Engine | None, provider: ModelProvider,
     def materialize(state: PlanState) -> PlanState:
         with tx(state["tenant_id"]) as conn:
             a = row(conn, "SELECT * FROM assessments WHERE id = :id FOR UPDATE", id=state["assessment_id"])
-            assert a is not None
+            if a is None:
+                raise LookupError(f"assessment {state['assessment_id']} not found")
             materialize_fn(conn, a, state)
         return {}
 

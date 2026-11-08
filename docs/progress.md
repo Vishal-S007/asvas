@@ -221,3 +221,9 @@ as the source of truth.
    or measured; no paid infrastructure was provisioned.
 3. Identity/keys: Keycloak in dev mode (H2); no Vault/KMS (local key files stand in); WebAuthn not used.
 4. Independent security review / penetration test of ASVAS itself has not been done.
+
+### Security review (2026-11-08) — docs/security-review.md
+- bandit + gosec + dependency scans triaged; 6 findings fixed (SR-1..SR-6: API security headers, configurable CORS with
+  production guard, strict `azp` check, docs off outside dev, dashboard production CSP, asserts removed).
+- Tested: `test_security_review.py` 5 passed; production build checked in Chromium incl. full SSO + TOTP flow under CSP, no errors.
+- Self-review only; independent review still outstanding.
