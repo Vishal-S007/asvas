@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$ROOT/var/sbom}"
 mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"  # absolute: later steps run from component directories
 fail=0
 
 echo "== Python (control plane)"

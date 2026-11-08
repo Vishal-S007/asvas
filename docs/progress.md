@@ -147,7 +147,8 @@ as the source of truth.
 - Done: `scripts/supply-chain.sh`, CI job `supply-chain` (uploads SBOMs + scan results as an artifact).
 - Tested locally: SBOMs control-plane (72 components, CycloneDX 1.6), execution-plane (34, 1.6), dashboard (6, 1.5);
   pip-audit 69 packages / 0 vulns; npm audit 0; govulncheck 0 reachable (after x/net 0.60 -> 0.62; Go tests re-run, pass).
-  Confirmed pip-audit exits 1 on a deliberately vulnerable requirement. The CI job itself has not run yet (no push from here).
+  Confirmed pip-audit exits 1 on a deliberately vulnerable requirement. First CI run (#3) failed: relative output dir broke when the
+  script changed directory; fixed by resolving it to an absolute path (reproduced and verified with the CI argument `sbom`).
 
 ## M4 batch (started 2026-11-08 03:30 IST)
 
